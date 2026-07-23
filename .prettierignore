@@ -1,0 +1,6 @@
+.next
+coverage
+node_modules
+convex/_generated
+AGENTS.md
+stop-slop
