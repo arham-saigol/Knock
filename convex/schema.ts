@@ -120,12 +120,14 @@ export default defineSchema({
     body: v.string(),
     status: v.union(
       v.literal("ready"),
+      v.literal("sending"),
       v.literal("skipped"),
       v.literal("sent"),
       v.literal("delivery_unknown"),
     ),
     version: v.number(),
     skippedAt: v.optional(v.number()),
+    deleteAt: v.optional(v.number()),
     sentAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -134,7 +136,7 @@ export default defineSchema({
     .index("by_project_launch", ["projectId", "projectLaunchId"])
     .index("by_project_status", ["projectId", "status"])
     .index("by_owner_status", ["ownerId", "status"])
-    .index("by_status_skipped", ["status", "skippedAt"]),
+    .index("by_status_and_delete_at", ["status", "deleteAt"]),
 
   deliveryAttempts: defineTable({
     ownerId: v.string(),

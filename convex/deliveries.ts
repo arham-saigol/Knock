@@ -1,7 +1,44 @@
 import { ConvexError, v } from "convex/values";
 
-import { mutation } from "./_generated/server";
+import { internal } from "./_generated/api";
+import type { Doc } from "./_generated/dataModel";
+import {
+  internalMutation,
+  mutation,
+  type MutationCtx,
+} from "./_generated/server";
 import { requireIdentity } from "./lib/auth";
+
+const DELIVERY_LEASE_MS = 5 * 60_000;
+
+async function quarantineDelivery(
+  ctx: MutationCtx,
+  attempt: Doc<"deliveryAttempts">,
+  error: string,
+) {
+  const draft = await ctx.db.get(attempt.draftId);
+  const now = Date.now();
+  await ctx.db.patch(attempt._id, {
+    status: "unknown",
+    failure: error.slice(0, 1_000),
+    finishedAt: now,
+  });
+  if (draft?.status !== "sending") return;
+  await ctx.db.patch(draft._id, {
+    status: "delivery_unknown",
+    updatedAt: now,
+  });
+  const projectLaunch = await ctx.db.get(draft.projectLaunchId);
+  if (projectLaunch) {
+    await ctx.db.patch(projectLaunch._id, {
+      status: "failed",
+      stage: "complete",
+      failure:
+        "SMTP delivery outcome is unknown. Check the Sent folder before retrying outside Knock.",
+      updatedAt: now,
+    });
+  }
+}
 
 export const reserve = mutation({
   args: { draftId: v.id("drafts") },
@@ -43,14 +80,21 @@ export const reserve = mutation({
           : "The prior delivery outcome is unknown. Check the Sent folder before taking any action.",
       );
     }
+    const now = Date.now();
     const attemptId = await ctx.db.insert("deliveryAttempts", {
       ownerId: identity.subject,
       projectId: project._id,
       draftId: draft._id,
       attemptNumber: attempts.length + 1,
       status: "sending",
-      startedAt: Date.now(),
+      startedAt: now,
     });
+    await ctx.db.patch(draft._id, { status: "sending", updatedAt: now });
+    await ctx.scheduler.runAfter(
+      DELIVERY_LEASE_MS + 5_000,
+      internal.deliveries.expireLease,
+      { attemptId },
+    );
     return {
       attemptId,
       senderName: project.senderName,
@@ -78,7 +122,7 @@ export const complete = mutation({
       throw new ConvexError("Delivery attempt is no longer active");
     }
     const draft = await ctx.db.get(attempt.draftId);
-    if (!draft || draft.status !== "ready")
+    if (!draft || draft.status !== "sending")
       throw new ConvexError("Draft is no longer available");
     const now = Date.now();
     await ctx.db.patch(attempt._id, {
@@ -111,11 +155,16 @@ export const fail = mutation({
       attempt.status !== "sending"
     )
       return;
+    const now = Date.now();
     await ctx.db.patch(attempt._id, {
       status: "failed",
       failure: args.error.slice(0, 1_000),
-      finishedAt: Date.now(),
+      finishedAt: now,
     });
+    const draft = await ctx.db.get(attempt.draftId);
+    if (draft?.status === "sending") {
+      await ctx.db.patch(draft._id, { status: "ready", updatedAt: now });
+    }
   },
 });
 
@@ -130,25 +179,24 @@ export const markUnknown = mutation({
       attempt.status !== "sending"
     )
       return;
-    const draft = await ctx.db.get(attempt.draftId);
-    const now = Date.now();
-    await ctx.db.patch(attempt._id, {
-      status: "unknown",
-      failure: args.error.slice(0, 1_000),
-      finishedAt: now,
-    });
-    if (draft) {
-      await ctx.db.patch(draft._id, {
-        status: "delivery_unknown",
-        updatedAt: now,
-      });
-      await ctx.db.patch(draft.projectLaunchId, {
-        status: "failed",
-        stage: "complete",
-        failure:
-          "SMTP delivery outcome is unknown. Check the Sent folder before retrying outside Knock.",
-        updatedAt: now,
-      });
-    }
+    await quarantineDelivery(ctx, attempt, args.error);
+  },
+});
+
+export const expireLease = internalMutation({
+  args: { attemptId: v.id("deliveryAttempts") },
+  handler: async (ctx, args) => {
+    const attempt = await ctx.db.get(args.attemptId);
+    if (
+      !attempt ||
+      attempt.status !== "sending" ||
+      Date.now() - attempt.startedAt < DELIVERY_LEASE_MS
+    )
+      return;
+    await quarantineDelivery(
+      ctx,
+      attempt,
+      "Delivery did not finish before the sending lease expired.",
+    );
   },
 });

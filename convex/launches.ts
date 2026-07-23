@@ -124,9 +124,13 @@ export const skip = mutation({
     if (project.skipRetention === "delete") {
       await ctx.db.delete(draft._id);
     } else {
+      const retentionDays = Number(project.skipRetention);
       await ctx.db.patch(draft._id, {
         status: "skipped",
         skippedAt: now,
+        deleteAt: Number.isFinite(retentionDays)
+          ? now + retentionDays * 86_400_000
+          : undefined,
         updatedAt: now,
       });
     }

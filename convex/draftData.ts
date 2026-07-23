@@ -142,20 +142,20 @@ export const queueForProject = internalMutation({
 
 export const cleanupSkipped = internalMutation({
   args: {},
-  handler: async (ctx) => {
+  handler: async (ctx): Promise<null> => {
+    const now = Date.now();
     const drafts = await ctx.db
       .query("drafts")
-      .withIndex("by_status_skipped", (q) => q.eq("status", "skipped"))
+      .withIndex("by_status_and_delete_at", (q) =>
+        q.eq("status", "skipped").gte("deleteAt", 0).lte("deleteAt", now),
+      )
       .take(100);
-    const now = Date.now();
     for (const draft of drafts) {
-      if (draft.status !== "skipped" || !draft.skippedAt) continue;
-      const project = await ctx.db.get(draft.projectId);
-      if (!project || project.skipRetention === "forever") continue;
-      const days =
-        project.skipRetention === "delete" ? 0 : Number(project.skipRetention);
-      if (now - draft.skippedAt >= days * 86_400_000)
-        await ctx.db.delete(draft._id);
+      await ctx.db.delete(draft._id);
     }
+    if (drafts.length === 100) {
+      await ctx.scheduler.runAfter(0, internal.draftData.cleanupSkipped, {});
+    }
+    return null;
   },
 });
