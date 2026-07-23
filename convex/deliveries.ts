@@ -64,23 +64,22 @@ export const reserve = mutation({
     const recipientEmail = projectLaunch.contactEmail.trim().toLowerCase();
     const companyUrl = launch.canonicalWebsiteUrl ?? launch.websiteUrl;
     const companyDomain = companyUrl ? rootDomain(companyUrl) : undefined;
-    const attempts = await ctx.db
+    const latestAttempt = await ctx.db
       .query("deliveryAttempts")
       .withIndex("by_draft", (q) => q.eq("draftId", draft._id))
       .order("desc")
-      .collect();
-    if (attempts.some((attempt) => attempt.status === "sent")) {
+      .first();
+    if (latestAttempt?.status === "sent") {
       throw new ConvexError("This draft was already sent");
     }
-    if (attempts.some((attempt) => attempt.status === "unknown")) {
+    if (latestAttempt?.status === "unknown") {
       throw new ConvexError(
         "Delivery outcome is unknown. Check the mailbox Sent folder before taking any action.",
       );
     }
-    const active = attempts.find((attempt) => attempt.status === "sending");
-    if (active) {
+    if (latestAttempt?.status === "sending") {
       throw new ConvexError(
-        Date.now() - active.startedAt < DELIVERY_LEASE_MS
+        Date.now() - latestAttempt.startedAt < DELIVERY_LEASE_MS
           ? "This draft is already being sent"
           : "The prior delivery outcome is unknown. Check the Sent folder before taking any action.",
       );
@@ -125,7 +124,7 @@ export const reserve = mutation({
       draftId: draft._id,
       recipientEmail,
       companyDomain,
-      attemptNumber: attempts.length + 1,
+      attemptNumber: (latestAttempt?.attemptNumber ?? 0) + 1,
       status: "sending",
       startedAt: now,
     });

@@ -142,24 +142,26 @@ export const runSync = internalAction({
 
     let filterStartedAt: number | undefined;
     try {
-      let launches;
-      try {
-        launches = await fetchProductHuntApi(day);
-      } catch (apiError) {
-        console.error("Product Hunt API failed; using RSS", apiError);
-        launches = await fetchProductHuntRss(day);
-      }
-      for (
-        let batchStart = 0;
-        batchStart < Math.max(launches.length, 1);
-        batchStart += launchBatchSize
-      ) {
-        await ctx.runMutation(internal.syncData.upsertLaunches, {
-          projectId: project._id,
-          runId: begun.runId,
-          batchIndex: batchStart / launchBatchSize,
-          launches: launches.slice(batchStart, batchStart + launchBatchSize),
-        });
+      if (!begun.resumeFiltering) {
+        let launches;
+        try {
+          launches = await fetchProductHuntApi(day);
+        } catch (apiError) {
+          console.error("Product Hunt API failed; using RSS", apiError);
+          launches = await fetchProductHuntRss(day);
+        }
+        for (
+          let batchStart = 0;
+          batchStart < Math.max(launches.length, 1);
+          batchStart += launchBatchSize
+        ) {
+          await ctx.runMutation(internal.syncData.upsertLaunches, {
+            projectId: project._id,
+            runId: begun.runId,
+            batchIndex: batchStart / launchBatchSize,
+            launches: launches.slice(batchStart, batchStart + launchBatchSize),
+          });
+        }
       }
       let candidateRows = await ctx.runQuery(
         internal.syncData.filterCandidates,

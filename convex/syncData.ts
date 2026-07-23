@@ -51,21 +51,30 @@ export const begin = internalMutation({
     const now = Date.now();
     if (existing) {
       if (existing.filterStartedAt) {
-        return { runId: existing._id, shouldRun: false };
+        return {
+          runId: existing._id,
+          shouldRun: false,
+          resumeFiltering: false,
+        };
       }
       if (
         existing.status === "running" &&
         now - existing.startedAt < 10 * 60_000
       ) {
-        return { runId: existing._id, shouldRun: false };
+        return {
+          runId: existing._id,
+          shouldRun: false,
+          resumeFiltering: false,
+        };
       }
+      const resumeFiltering = existing.filterRecoveryCount !== undefined;
       await ctx.db.patch(existing._id, {
         status: "running",
         error: undefined,
         startedAt: now,
         completedAt: undefined,
       });
-      return { runId: existing._id, shouldRun: true };
+      return { runId: existing._id, shouldRun: true, resumeFiltering };
     }
     const runId = await ctx.db.insert("syncRuns", {
       key: args.key,
@@ -82,7 +91,7 @@ export const begin = internalMutation({
       failedCount: 0,
       startedAt: now,
     });
-    return { runId, shouldRun: true };
+    return { runId, shouldRun: true, resumeFiltering: false };
   },
 });
 
