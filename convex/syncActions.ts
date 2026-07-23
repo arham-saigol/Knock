@@ -21,6 +21,8 @@ const filterOutputSchema = z.object({
   ),
 });
 
+const launchBatchSize = 20;
+
 async function filterLaunches({
   project,
   candidates,
@@ -147,23 +149,25 @@ export const runSync = internalAction({
         console.error("Product Hunt API failed; using RSS", apiError);
         launches = await fetchProductHuntRss(day);
       }
-      await ctx.runMutation(internal.syncData.upsertLaunches, {
-        projectId: project._id,
-        runId: begun.runId,
-        launches,
-      });
-      const candidateRows = await ctx.runQuery(
+      for (
+        let batchStart = 0;
+        batchStart < Math.max(launches.length, 1);
+        batchStart += launchBatchSize
+      ) {
+        await ctx.runMutation(internal.syncData.upsertLaunches, {
+          projectId: project._id,
+          runId: begun.runId,
+          batchIndex: batchStart / launchBatchSize,
+          launches: launches.slice(batchStart, batchStart + launchBatchSize),
+        });
+      }
+      let candidateRows = await ctx.runQuery(
         internal.syncData.filterCandidates,
         {
           runId: begun.runId,
         },
       );
-      const candidates = candidateRows.flatMap((row) =>
-        row.launch
-          ? [{ projectLaunchId: row.projectLaunchId, launch: row.launch }]
-          : [],
-      );
-      if (candidates.length === 0) {
+      if (candidateRows.length === 0) {
         await ctx.runMutation(internal.syncData.completeWithoutCandidates, {
           runId: begun.runId,
         });
@@ -174,31 +178,59 @@ export const runSync = internalAction({
       });
       if (claimed === null) return { started: false };
       filterStartedAt = claimed;
+      let activeFilterStartedAt = claimed;
 
-      const rawDecisions = await filterLaunches({ project, candidates });
-      const candidateIds = new Map(
-        candidates.map((candidate) => [
-          candidate.projectLaunchId as string,
-          candidate.projectLaunchId,
-        ]),
-      );
-      const seen = new Set<string>();
-      const decisions = rawDecisions.flatMap((decision) => {
-        const projectLaunchId = candidateIds.get(decision.projectLaunchId);
-        if (!projectLaunchId || seen.has(decision.projectLaunchId)) return [];
-        seen.add(decision.projectLaunchId);
-        return [
-          {
-            projectLaunchId,
-            decision: decision.decision,
-            reason: decision.reason,
-          },
-        ];
-      });
-      await ctx.runMutation(internal.syncData.applyFilters, {
+      while (candidateRows.length > 0) {
+        const candidates = candidateRows.flatMap((row) =>
+          row.launch
+            ? [{ projectLaunchId: row.projectLaunchId, launch: row.launch }]
+            : [],
+        );
+        const rawDecisions =
+          candidates.length > 0
+            ? await filterLaunches({ project, candidates })
+            : [];
+        const candidateIds = new Map(
+          candidates.map((candidate) => [
+            candidate.projectLaunchId as string,
+            candidate.projectLaunchId,
+          ]),
+        );
+        const seen = new Set<string>();
+        const decisions = rawDecisions.flatMap((decision) => {
+          const projectLaunchId = candidateIds.get(decision.projectLaunchId);
+          if (!projectLaunchId || seen.has(decision.projectLaunchId)) return [];
+          seen.add(decision.projectLaunchId);
+          return [
+            {
+              projectLaunchId,
+              decision: decision.decision,
+              reason: decision.reason,
+            },
+          ];
+        });
+        await ctx.runMutation(internal.syncData.applyFilters, {
+          runId: begun.runId,
+          filterStartedAt: activeFilterStartedAt,
+          candidateIds: candidateRows.map((row) => row.projectLaunchId),
+          decisions,
+        });
+        candidateRows = await ctx.runQuery(internal.syncData.filterCandidates, {
+          runId: begun.runId,
+        });
+        if (candidateRows.length > 0) {
+          const renewed: number | null = await ctx.runMutation(
+            internal.syncData.renewFilterCall,
+            { runId: begun.runId, filterStartedAt: activeFilterStartedAt },
+          );
+          if (renewed === null) return { started: false };
+          activeFilterStartedAt = renewed;
+          filterStartedAt = renewed;
+        }
+      }
+      await ctx.runMutation(internal.syncData.completeFilters, {
         runId: begun.runId,
-        filterStartedAt,
-        decisions,
+        filterStartedAt: activeFilterStartedAt,
       });
       return { started: true };
     } catch (error) {

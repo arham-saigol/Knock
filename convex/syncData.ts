@@ -8,6 +8,7 @@ import { syncKindValidator } from "./validators";
 const filterLeaseMs = 10 * 60_000;
 const filterRecoveryDelayMs = 30_000;
 const maxFilterRecoveries = 1;
+const filterBatchSize = 8;
 
 const launchInput = v.object({
   productHuntId: v.optional(v.string()),
@@ -87,6 +88,7 @@ export const upsertLaunches = internalMutation({
   args: {
     projectId: v.id("projects"),
     runId: v.id("syncRuns"),
+    batchIndex: v.number(),
     launches: v.array(launchInput),
   },
   handler: async (ctx, args) => {
@@ -179,8 +181,18 @@ export const upsertLaunches = internalMutation({
 
     await ctx.db.patch(run._id, {
       source: args.launches[0]?.source,
-      fetchedCount: args.launches.length,
-      newCount: candidateIds.length,
+      fetchedCount:
+        args.batchIndex === 0
+          ? args.launches.length
+          : run.fetchedCount + args.launches.length,
+      newCount:
+        args.batchIndex === 0
+          ? candidateIds.length
+          : run.newCount + candidateIds.length,
+      keptCount: args.batchIndex === 0 ? 0 : run.keptCount,
+      failedCount: args.batchIndex === 0 ? 0 : run.failedCount,
+      filterCompletedAt:
+        args.batchIndex === 0 ? undefined : run.filterCompletedAt,
     });
     return candidateIds;
   },
@@ -194,7 +206,7 @@ export const filterCandidates = internalQuery({
       .withIndex("by_sync_stage", (q) =>
         q.eq("syncRunId", args.runId).eq("stage", "filtering"),
       )
-      .collect();
+      .take(filterBatchSize);
     return Promise.all(
       projectLaunches.map(async (projectLaunch) => ({
         projectLaunchId: projectLaunch._id,
@@ -208,7 +220,28 @@ export const claimFilterCall = internalMutation({
   args: { runId: v.id("syncRuns") },
   handler: async (ctx, args) => {
     const run = await ctx.db.get(args.runId);
-    if (!run || run.filterStartedAt) return null;
+    if (!run || run.status !== "running" || run.filterStartedAt) return null;
+    const filterStartedAt = Date.now();
+    await ctx.db.patch(run._id, { filterStartedAt });
+    await ctx.scheduler.runAfter(
+      filterLeaseMs,
+      internal.syncData.recoverFilterLease,
+      { runId: run._id, filterStartedAt },
+    );
+    return filterStartedAt;
+  },
+});
+
+export const renewFilterCall = internalMutation({
+  args: { runId: v.id("syncRuns"), filterStartedAt: v.number() },
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (
+      !run ||
+      run.status !== "running" ||
+      run.filterStartedAt !== args.filterStartedAt
+    )
+      return null;
     const filterStartedAt = Date.now();
     await ctx.db.patch(run._id, { filterStartedAt });
     await ctx.scheduler.runAfter(
@@ -233,27 +266,16 @@ export const recoverFilterLease = internalMutation({
     const now = Date.now();
     const recoveryCount = run.filterRecoveryCount ?? 0;
     if (recoveryCount >= maxFilterRecoveries) {
-      const candidates = await ctx.db
-        .query("projectLaunches")
-        .withIndex("by_sync_stage", (q) =>
-          q.eq("syncRunId", run._id).eq("stage", "filtering"),
-        )
-        .collect();
-      for (const candidate of candidates) {
-        await ctx.db.patch(candidate._id, {
-          status: "failed",
-          stage: "complete",
-          failure: "Filter worker timed out after retrying",
-          updatedAt: now,
-        });
-      }
       await ctx.db.patch(run._id, {
         status: "failed",
-        filterStartedAt: undefined,
         filterRecoveryCount: undefined,
-        failedCount: candidates.length,
         error: "Filter worker timed out after retrying",
         completedAt: now,
+      });
+      await ctx.scheduler.runAfter(0, internal.syncData.fail, {
+        runId: run._id,
+        filterStartedAt: args.filterStartedAt,
+        error: "Filter worker timed out after retrying",
       });
       return;
     }
@@ -281,6 +303,7 @@ export const applyFilters = internalMutation({
   args: {
     runId: v.id("syncRuns"),
     filterStartedAt: v.number(),
+    candidateIds: v.array(v.id("projectLaunches")),
     decisions: v.array(
       v.object({
         projectLaunchId: v.id("projectLaunches"),
@@ -297,19 +320,20 @@ export const applyFilters = internalMutation({
       run.filterStartedAt !== args.filterStartedAt
     )
       return;
-    const candidates = await ctx.db
-      .query("projectLaunches")
-      .withIndex("by_sync_stage", (q) =>
-        q.eq("syncRunId", run._id).eq("stage", "filtering"),
-      )
-      .collect();
     const byId = new Map(
       args.decisions.map((decision) => [decision.projectLaunchId, decision]),
     );
     let keptCount = 0;
     let failedCount = 0;
     const now = Date.now();
-    for (const candidate of candidates) {
+    for (const candidateId of args.candidateIds) {
+      const candidate = await ctx.db.get(candidateId);
+      if (
+        !candidate ||
+        candidate.syncRunId !== run._id ||
+        candidate.stage !== "filtering"
+      )
+        continue;
       const decision = byId.get(candidate._id);
       if (!decision) {
         failedCount += 1;
@@ -343,13 +367,38 @@ export const applyFilters = internalMutation({
       });
     }
     await ctx.db.patch(run._id, {
-      status: failedCount > 0 ? "partial" : "completed",
-      keptCount,
-      failedCount,
+      keptCount: run.keptCount + keptCount,
+      failedCount: run.failedCount + failedCount,
+    });
+  },
+});
+
+export const completeFilters = internalMutation({
+  args: { runId: v.id("syncRuns"), filterStartedAt: v.number() },
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (
+      !run ||
+      run.status !== "running" ||
+      run.filterStartedAt !== args.filterStartedAt
+    )
+      return false;
+    const remaining = await ctx.db
+      .query("projectLaunches")
+      .withIndex("by_sync_stage", (q) =>
+        q.eq("syncRunId", run._id).eq("stage", "filtering"),
+      )
+      .take(1);
+    if (remaining.length > 0) return false;
+    const now = Date.now();
+    await ctx.db.patch(run._id, {
+      status: run.failedCount > 0 ? "partial" : "completed",
+      filterStartedAt: undefined,
       filterCompletedAt: now,
       filterRecoveryCount: undefined,
       completedAt: now,
     });
+    return true;
   },
 });
 
@@ -359,15 +408,15 @@ export const fail = internalMutation({
     filterStartedAt: v.optional(v.number()),
     error: v.string(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<null> => {
     const run = await ctx.db.get(args.runId);
-    if (!run || run.filterStartedAt !== args.filterStartedAt) return;
+    if (!run || run.filterStartedAt !== args.filterStartedAt) return null;
     const candidates = await ctx.db
       .query("projectLaunches")
       .withIndex("by_sync_stage", (q) =>
         q.eq("syncRunId", run._id).eq("stage", "filtering"),
       )
-      .collect();
+      .take(50);
     const now = Date.now();
     for (const candidate of candidates) {
       await ctx.db.patch(candidate._id, {
@@ -379,10 +428,16 @@ export const fail = internalMutation({
     }
     await ctx.db.patch(run._id, {
       status: "failed",
-      failedCount: candidates.length,
+      failedCount: run.failedCount + candidates.length,
+      filterStartedAt:
+        candidates.length === 50 ? args.filterStartedAt : undefined,
       error: args.error.slice(0, 1_000),
       completedAt: now,
     });
+    if (candidates.length === 50) {
+      await ctx.scheduler.runAfter(0, internal.syncData.fail, args);
+    }
+    return null;
   },
 });
 
@@ -393,6 +448,8 @@ export const completeWithoutCandidates = internalMutation({
     if (!run) return;
     await ctx.db.patch(run._id, {
       status: "completed",
+      filterStartedAt: undefined,
+      filterRecoveryCount: undefined,
       completedAt: Date.now(),
     });
   },
