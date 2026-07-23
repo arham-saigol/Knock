@@ -19,12 +19,16 @@ Write direct human prose. Cut filler openers, emphasis crutches, business jargon
 export const generateDraft = internalAction({
   args: { projectLaunchId: v.id("projectLaunches") },
   handler: async (ctx, args) => {
-    const claimed = await ctx.runMutation(internal.draftData.claim, args);
-    if (!claimed) return;
+    const draftStartedAt = await ctx.runMutation(
+      internal.draftData.claim,
+      args,
+    );
+    if (draftStartedAt === null) return;
     const bundle = await ctx.runQuery(internal.draftData.bundle, args);
     if (
       !bundle?.projectLaunch.scrapeMarkdown ||
-      !bundle.projectLaunch.contactEmail
+      !bundle.projectLaunch.contactEmail ||
+      bundle.projectLaunch.draftStartedAt !== draftStartedAt
     )
       return;
     try {
@@ -55,12 +59,14 @@ ${bundle.projectLaunch.scrapeMarkdown}
       });
       await ctx.runMutation(internal.draftData.save, {
         projectLaunchId: bundle.projectLaunch._id,
+        draftStartedAt,
         subject: draft.subject.replace(/[\r\n]+/g, " ").trim(),
         body: draft.body.replace(/\r\n/g, "\n").trim(),
       });
     } catch (error) {
       await ctx.runMutation(internal.draftData.fail, {
         projectLaunchId: bundle.projectLaunch._id,
+        draftStartedAt,
         error: errorMessage(error),
       });
     }

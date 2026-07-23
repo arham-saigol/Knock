@@ -215,10 +215,13 @@ function buildMarkdown(pages: Iterable<Page>) {
 export const processLaunch = internalAction({
   args: { projectLaunchId: v.id("projectLaunches") },
   handler: async (ctx, args) => {
-    const claimed = await ctx.runMutation(internal.researchData.claim, args);
-    if (!claimed) return;
+    const researchStartedAt = await ctx.runMutation(
+      internal.researchData.claim,
+      args,
+    );
+    if (researchStartedAt === null) return;
     const bundle = await ctx.runQuery(internal.researchData.bundle, args);
-    if (!bundle) return;
+    if (bundle?.projectLaunch.researchStartedAt !== researchStartedAt) return;
     try {
       const launchWebsite = normalizeOfficialWebsiteUrl(
         bundle.launch.websiteUrl,
@@ -253,6 +256,7 @@ export const processLaunch = internalAction({
       if (!candidate) {
         await ctx.runMutation(internal.researchData.savePendingAgent, {
           projectLaunchId: bundle.projectLaunch._id,
+          researchStartedAt,
           scrapeMarkdown,
           scrapedPages,
         });
@@ -260,6 +264,7 @@ export const processLaunch = internalAction({
       }
       await ctx.runMutation(internal.researchData.save, {
         projectLaunchId: bundle.projectLaunch._id,
+        researchStartedAt,
         scrapeMarkdown,
         scrapedPages,
         contactEmail: candidate.email,
@@ -271,6 +276,7 @@ export const processLaunch = internalAction({
     } catch (error) {
       await ctx.runMutation(internal.researchData.fail, {
         projectLaunchId: bundle.projectLaunch._id,
+        researchStartedAt,
         error: errorMessage(error),
       });
     }
@@ -278,49 +284,68 @@ export const processLaunch = internalAction({
 });
 
 export const resolveContact = internalAction({
-  args: { projectLaunchId: v.id("projectLaunches") },
+  args: {
+    projectLaunchId: v.id("projectLaunches"),
+    contactStartedAt: v.number(),
+  },
   handler: async (ctx, args) => {
     const bundle = await ctx.runQuery(internal.researchData.bundle, args);
-    if (!bundle || bundle.projectLaunch.stage !== "contact") return;
+    if (
+      !bundle ||
+      bundle.projectLaunch.stage !== "contact" ||
+      bundle.projectLaunch.contactStartedAt !== args.contactStartedAt
+    )
+      return;
     let email: string | undefined;
     let sourceUrl: string | undefined;
     let evidence: string | undefined;
     const launchWebsite = normalizeOfficialWebsiteUrl(bundle.launch.websiteUrl);
-    const claimed = launchWebsite
-      ? await ctx.runMutation(internal.researchData.claimFirecrawlAgent, {
-          day: pktDay(),
-        })
-      : false;
-    if (claimed && launchWebsite) {
-      try {
-        const result = await runContactAgent({
-          name: bundle.launch.name,
-          websiteUrl: launchWebsite,
-        });
-        const candidateEmail =
-          typeof result?.email === "string"
-            ? result.email.trim().toLowerCase()
-            : "";
-        const candidateSource =
-          typeof result?.sourceUrl === "string"
-            ? normalizeWebsiteUrl(result.sourceUrl)
-            : undefined;
-        if (
-          candidateEmail &&
-          candidateSource &&
-          isAllowedContactEmail(candidateEmail) &&
-          isSameRootDomain(candidateSource, launchWebsite)
-        ) {
-          email = candidateEmail;
-          sourceUrl = candidateSource;
-          evidence = "Published business contact found by Firecrawl Agent";
-        }
-      } catch (error) {
-        console.error("Firecrawl contact Agent failed", error);
+    if (!launchWebsite) {
+      await ctx.runMutation(internal.researchData.finishAgent, {
+        projectLaunchId: bundle.projectLaunch._id,
+        contactStartedAt: args.contactStartedAt,
+        generateNow: false,
+      });
+      return;
+    }
+    const contactStartedAt = await ctx.runMutation(
+      internal.researchData.claimFirecrawlAgent,
+      {
+        projectLaunchId: bundle.projectLaunch._id,
+        contactStartedAt: args.contactStartedAt,
+        day: pktDay(),
+      },
+    );
+    if (contactStartedAt === null) return;
+    try {
+      const result = await runContactAgent({
+        name: bundle.launch.name,
+        websiteUrl: launchWebsite,
+      });
+      const candidateEmail =
+        typeof result?.email === "string"
+          ? result.email.trim().toLowerCase()
+          : "";
+      const candidateSource =
+        typeof result?.sourceUrl === "string"
+          ? normalizeWebsiteUrl(result.sourceUrl)
+          : undefined;
+      if (
+        candidateEmail &&
+        candidateSource &&
+        isAllowedContactEmail(candidateEmail) &&
+        isSameRootDomain(candidateSource, launchWebsite)
+      ) {
+        email = candidateEmail;
+        sourceUrl = candidateSource;
+        evidence = "Published business contact found by Firecrawl Agent";
       }
+    } catch (error) {
+      console.error("Firecrawl contact Agent failed", error);
     }
     await ctx.runMutation(internal.researchData.finishAgent, {
       projectLaunchId: bundle.projectLaunch._id,
+      contactStartedAt,
       contactEmail: email,
       contactSourceUrl: sourceUrl,
       contactEvidence: evidence,

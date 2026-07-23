@@ -23,13 +23,13 @@ export const claim = internalMutation({
   args: { projectLaunchId: v.id("projectLaunches") },
   handler: async (ctx, args) => {
     const projectLaunch = await ctx.db.get(args.projectLaunchId);
-    if (!projectLaunch || projectLaunch.stage !== "scraping") return false;
+    if (!projectLaunch || projectLaunch.stage !== "scraping") return null;
     const now = Date.now();
     if (
       projectLaunch.researchStartedAt &&
       now - projectLaunch.researchStartedAt < 10 * 60_000
     ) {
-      return false;
+      return null;
     }
     await ctx.db.patch(projectLaunch._id, {
       researchStartedAt: now,
@@ -44,7 +44,7 @@ export const claim = internalMutation({
         startedAt: now,
       },
     );
-    return true;
+    return now;
   },
 });
 
@@ -64,6 +64,7 @@ export const recoverLease = internalMutation({
     await ctx.db.patch(projectLaunch._id, {
       status: "failed",
       stage: "complete",
+      researchStartedAt: undefined,
       failure:
         "Website research exceeded its processing lease. Retry this launch.",
       researchCompletedAt: Date.now(),
@@ -73,15 +74,34 @@ export const recoverLease = internalMutation({
 });
 
 export const claimFirecrawlAgent = internalMutation({
-  args: { day: v.string() },
+  args: {
+    projectLaunchId: v.id("projectLaunches"),
+    contactStartedAt: v.number(),
+    day: v.string(),
+  },
   handler: async (ctx, args) => {
+    const projectLaunch = await ctx.db.get(args.projectLaunchId);
+    if (
+      !projectLaunch ||
+      projectLaunch.stage !== "contact" ||
+      projectLaunch.contactStartedAt !== args.contactStartedAt
+    )
+      return null;
     const usage = await ctx.db
       .query("agentUsage")
       .withIndex("by_day_kind", (q) =>
         q.eq("day", args.day).eq("kind", "firecrawl_contact"),
       )
       .unique();
-    if (usage && usage.count >= 5) return false;
+    if (usage && usage.count >= 5) {
+      await ctx.db.patch(projectLaunch._id, {
+        status: "no_email",
+        stage: "complete",
+        contactStartedAt: undefined,
+        updatedAt: Date.now(),
+      });
+      return null;
+    }
     const now = Date.now();
     if (usage) {
       await ctx.db.patch(usage._id, { count: usage.count + 1, updatedAt: now });
@@ -93,13 +113,46 @@ export const claimFirecrawlAgent = internalMutation({
         updatedAt: now,
       });
     }
-    return true;
+    const contactStartedAt = Math.max(now, args.contactStartedAt + 1);
+    await ctx.db.patch(projectLaunch._id, {
+      contactStartedAt,
+      updatedAt: now,
+    });
+    await ctx.scheduler.runAfter(
+      10 * 60_000 + 5_000,
+      internal.researchData.recoverContactLease,
+      { projectLaunchId: projectLaunch._id, contactStartedAt },
+    );
+    return contactStartedAt;
+  },
+});
+
+export const recoverContactLease = internalMutation({
+  args: {
+    projectLaunchId: v.id("projectLaunches"),
+    contactStartedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const projectLaunch = await ctx.db.get(args.projectLaunchId);
+    if (
+      !projectLaunch ||
+      projectLaunch.stage !== "contact" ||
+      projectLaunch.contactStartedAt !== args.contactStartedAt
+    )
+      return;
+    await ctx.db.patch(projectLaunch._id, {
+      status: "no_email",
+      stage: "complete",
+      contactStartedAt: undefined,
+      updatedAt: Date.now(),
+    });
   },
 });
 
 export const save = internalMutation({
   args: {
     projectLaunchId: v.id("projectLaunches"),
+    researchStartedAt: v.number(),
     scrapeMarkdown: v.string(),
     scrapedPages: v.array(scrapedPageValidator),
     contactEmail: v.optional(v.string()),
@@ -110,7 +163,12 @@ export const save = internalMutation({
   },
   handler: async (ctx, args) => {
     const projectLaunch = await ctx.db.get(args.projectLaunchId);
-    if (!projectLaunch || projectLaunch.status === "sent") return;
+    if (
+      !projectLaunch ||
+      projectLaunch.stage !== "scraping" ||
+      projectLaunch.researchStartedAt !== args.researchStartedAt
+    )
+      return;
     const now = Date.now();
     if (!args.contactEmail) {
       await ctx.db.patch(projectLaunch._id, {
@@ -118,6 +176,7 @@ export const save = internalMutation({
         scrapedPages: args.scrapedPages,
         status: "no_email",
         stage: "complete",
+        researchStartedAt: undefined,
         researchCompletedAt: now,
         updatedAt: now,
       });
@@ -132,6 +191,7 @@ export const save = internalMutation({
       contactEvidence: args.contactEvidence?.slice(0, 1_000),
       status: "processing",
       stage: "drafting",
+      researchStartedAt: undefined,
       researchCompletedAt: now,
       updatedAt: now,
     });
@@ -146,29 +206,45 @@ export const save = internalMutation({
 export const savePendingAgent = internalMutation({
   args: {
     projectLaunchId: v.id("projectLaunches"),
+    researchStartedAt: v.number(),
     scrapeMarkdown: v.string(),
     scrapedPages: v.array(scrapedPageValidator),
   },
   handler: async (ctx, args) => {
     const projectLaunch = await ctx.db.get(args.projectLaunchId);
-    if (!projectLaunch || projectLaunch.status === "sent") return;
+    if (
+      !projectLaunch ||
+      projectLaunch.stage !== "scraping" ||
+      projectLaunch.researchStartedAt !== args.researchStartedAt
+    )
+      return;
+    const contactStartedAt = Date.now();
     await ctx.db.patch(projectLaunch._id, {
       scrapeMarkdown: args.scrapeMarkdown,
       scrapedPages: args.scrapedPages,
       status: "processing",
       stage: "contact",
-      researchCompletedAt: Date.now(),
-      updatedAt: Date.now(),
+      researchStartedAt: undefined,
+      researchCompletedAt: contactStartedAt,
+      contactStartedAt,
+      updatedAt: contactStartedAt,
     });
     await ctx.scheduler.runAfter(0, internal.researchActions.resolveContact, {
       projectLaunchId: projectLaunch._id,
+      contactStartedAt,
     });
+    await ctx.scheduler.runAfter(
+      10 * 60_000 + 5_000,
+      internal.researchData.recoverContactLease,
+      { projectLaunchId: projectLaunch._id, contactStartedAt },
+    );
   },
 });
 
 export const finishAgent = internalMutation({
   args: {
     projectLaunchId: v.id("projectLaunches"),
+    contactStartedAt: v.number(),
     contactEmail: v.optional(v.string()),
     contactSourceUrl: v.optional(v.string()),
     contactEvidence: v.optional(v.string()),
@@ -176,12 +252,18 @@ export const finishAgent = internalMutation({
   },
   handler: async (ctx, args) => {
     const projectLaunch = await ctx.db.get(args.projectLaunchId);
-    if (!projectLaunch || projectLaunch.stage !== "contact") return;
+    if (
+      !projectLaunch ||
+      projectLaunch.stage !== "contact" ||
+      projectLaunch.contactStartedAt !== args.contactStartedAt
+    )
+      return;
     const now = Date.now();
     if (!args.contactEmail) {
       await ctx.db.patch(projectLaunch._id, {
         status: "no_email",
         stage: "complete",
+        contactStartedAt: undefined,
         updatedAt: now,
       });
       return;
@@ -193,6 +275,7 @@ export const finishAgent = internalMutation({
       contactEvidence: args.contactEvidence?.slice(0, 1_000),
       status: "processing",
       stage: "drafting",
+      contactStartedAt: undefined,
       updatedAt: now,
     });
     if (args.generateNow) {
@@ -204,13 +287,23 @@ export const finishAgent = internalMutation({
 });
 
 export const fail = internalMutation({
-  args: { projectLaunchId: v.id("projectLaunches"), error: v.string() },
+  args: {
+    projectLaunchId: v.id("projectLaunches"),
+    researchStartedAt: v.number(),
+    error: v.string(),
+  },
   handler: async (ctx, args) => {
     const projectLaunch = await ctx.db.get(args.projectLaunchId);
-    if (!projectLaunch || projectLaunch.status === "sent") return;
+    if (
+      !projectLaunch ||
+      projectLaunch.stage !== "scraping" ||
+      projectLaunch.researchStartedAt !== args.researchStartedAt
+    )
+      return;
     await ctx.db.patch(projectLaunch._id, {
       status: "failed",
       stage: "complete",
+      researchStartedAt: undefined,
       failure: args.error.slice(0, 1_000),
       researchCompletedAt: Date.now(),
       updatedAt: Date.now(),

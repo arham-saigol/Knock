@@ -88,7 +88,8 @@ export default function TodayPage() {
     );
   }
 
-  const readyCount = queue?.length ?? 0;
+  const readyCount = queue?.items.length ?? 0;
+  const readyCountLabel = queue?.hasMore ? "50+" : readyCount;
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-6 md:px-8 md:py-8">
       <header className="border-foreground flex flex-col gap-5 border-b-2 pb-6 sm:flex-row sm:items-end sm:justify-between">
@@ -124,7 +125,7 @@ export default function TodayPage() {
           >
             <Play className="fill-current" /> Review queue
             <span className="ml-1 border border-current px-1.5 font-mono text-[10px]">
-              {readyCount}
+              {readyCountLabel}
             </span>
           </Button>
         </div>

@@ -164,7 +164,9 @@ export const update = mutation({
       JSON.stringify(args.brandContext);
     const domainChanged = canonicalDomain !== project.canonicalDomain;
     const monitorChanged =
-      args.monitorEnabled !== project.monitorEnabled || domainChanged;
+      args.monitorEnabled !== project.monitorEnabled ||
+      domainChanged ||
+      (args.monitorEnabled && Boolean(project.monitorError));
     const monitorGeneration =
       project.monitorGeneration + (monitorChanged ? 1 : 0);
     if (contextChanged && !args.brandContext.whatItDoes.trim()) {

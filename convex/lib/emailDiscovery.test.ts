@@ -47,8 +47,8 @@ describe("email discovery", () => {
       `,
     });
 
-    expect(candidates.map((candidate) => candidate.email)).toContain(
-      "founder@example.com",
-    );
+    const emails = candidates.map((candidate) => candidate.email);
+    expect(emails).toContain("founder@example.com");
+    expect(emails).not.toContain("%ZZ");
   });
 });

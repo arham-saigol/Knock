@@ -12,7 +12,7 @@ export const claim = internalMutation({
       projectLaunch.stage !== "drafting" ||
       !projectLaunch.contactEmail
     ) {
-      return false;
+      return null;
     }
     const existing = await ctx.db
       .query("drafts")
@@ -33,19 +33,19 @@ export const claim = internalMutation({
         stage: existing.status === "sent" ? "complete" : "review",
         updatedAt: Date.now(),
       });
-      return false;
+      return null;
     }
     const now = Date.now();
     if (
       projectLaunch.draftStartedAt &&
       now - projectLaunch.draftStartedAt < 10 * 60_000
     )
-      return false;
+      return null;
     await ctx.db.patch(projectLaunch._id, {
       draftStartedAt: now,
       updatedAt: now,
     });
-    return true;
+    return now;
   },
 });
 
@@ -66,12 +66,18 @@ export const bundle = internalQuery({
 export const save = internalMutation({
   args: {
     projectLaunchId: v.id("projectLaunches"),
+    draftStartedAt: v.number(),
     subject: v.string(),
     body: v.string(),
   },
   handler: async (ctx, args) => {
     const projectLaunch = await ctx.db.get(args.projectLaunchId);
-    if (!projectLaunch || projectLaunch.stage !== "drafting") return;
+    if (
+      !projectLaunch ||
+      projectLaunch.stage !== "drafting" ||
+      projectLaunch.draftStartedAt !== args.draftStartedAt
+    )
+      return;
     const existing = await ctx.db
       .query("drafts")
       .withIndex("by_project_launch", (q) =>
@@ -98,6 +104,7 @@ export const save = internalMutation({
     await ctx.db.patch(projectLaunch._id, {
       status: "ready",
       stage: "review",
+      draftStartedAt: undefined,
       failure: undefined,
       updatedAt: now,
     });
@@ -105,13 +112,23 @@ export const save = internalMutation({
 });
 
 export const fail = internalMutation({
-  args: { projectLaunchId: v.id("projectLaunches"), error: v.string() },
+  args: {
+    projectLaunchId: v.id("projectLaunches"),
+    draftStartedAt: v.number(),
+    error: v.string(),
+  },
   handler: async (ctx, args) => {
     const projectLaunch = await ctx.db.get(args.projectLaunchId);
-    if (!projectLaunch || projectLaunch.status === "sent") return;
+    if (
+      !projectLaunch ||
+      projectLaunch.stage !== "drafting" ||
+      projectLaunch.draftStartedAt !== args.draftStartedAt
+    )
+      return;
     await ctx.db.patch(projectLaunch._id, {
       status: "failed",
       stage: "complete",
+      draftStartedAt: undefined,
       failure: args.error.slice(0, 1_000),
       updatedAt: Date.now(),
     });

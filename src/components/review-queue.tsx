@@ -38,7 +38,8 @@ export function ReviewQueue({
   const skipDraft = useMutation(api.launches.skip);
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
   const active =
-    queue?.filter((item) => item.launch && !hidden.has(item.draft._id)) ?? [];
+    queue?.items.filter((item) => item.launch && !hidden.has(item.draft._id)) ??
+    [];
   const current = active[0];
   const [edits, setEdits] = useState<
     Record<string, { subject: string; body: string }>
@@ -300,7 +301,7 @@ export function ReviewQueue({
             ) : null}
             <div className="border-foreground bg-background sticky bottom-0 -mx-5 flex items-center justify-between gap-4 border-t-2 px-5 py-4 md:-mx-10 md:px-10">
               <span className="text-muted-foreground hidden font-mono text-[10px] uppercase sm:block">
-                {active.length} left in queue
+                {queue?.hasMore ? "50+" : active.length} left in queue
               </span>
               <div className="ml-auto flex gap-3">
                 <Button

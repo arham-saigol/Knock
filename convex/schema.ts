@@ -101,6 +101,7 @@ export default defineSchema({
     failure: v.optional(v.string()),
     researchStartedAt: v.optional(v.number()),
     researchCompletedAt: v.optional(v.number()),
+    contactStartedAt: v.optional(v.number()),
     draftStartedAt: v.optional(v.number()),
     discoveredAt: v.number(),
     updatedAt: v.number(),

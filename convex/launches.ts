@@ -26,17 +26,20 @@ export const today = query({
   args: { projectId: v.id("projects"), day: v.string() },
   handler: async (ctx, args) => {
     await requireProject(ctx, args.projectId);
-    const rows = await ctx.db
+    const result = await ctx.db
       .query("projectLaunches")
       .withIndex("by_project_day", (q) =>
         q.eq("projectId", args.projectId).eq("launchDay", args.day),
       )
       .order("desc")
-      .collect();
+      .filter((q) => q.neq(q.field("status"), "filtered"))
+      .paginate({
+        numItems: 100,
+        cursor: null,
+        maximumRowsRead: 500,
+      });
     const joined = await Promise.all(
-      rows
-        .filter((row) => row.status !== "filtered")
-        .map((row) => joinLaunch(ctx, row)),
+      result.page.map((row) => joinLaunch(ctx, row)),
     );
     return joined.filter((row) => row !== null);
   },
@@ -52,9 +55,9 @@ export const reviewQueue = query({
         q.eq("projectId", args.projectId).eq("status", "ready"),
       )
       .order("asc")
-      .collect();
-    return Promise.all(
-      drafts.map(async (draft) => {
+      .take(51);
+    const items = await Promise.all(
+      drafts.slice(0, 50).map(async (draft) => {
         const [launch, projectLaunch] = await Promise.all([
           ctx.db.get(draft.launchId),
           ctx.db.get(draft.projectLaunchId),
@@ -62,6 +65,7 @@ export const reviewQueue = query({
         return { draft, launch, projectLaunch };
       }),
     );
+    return { items, hasMore: drafts.length > 50 };
   },
 });
 
