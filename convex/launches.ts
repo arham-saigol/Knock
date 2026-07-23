@@ -197,8 +197,15 @@ export const retry = mutation({
       });
       return;
     }
-    throw new ConvexError(
-      "Run Sync now to retry this launch's filter decision",
-    );
+    const syncRun = await ctx.db.get(projectLaunch.syncRunId);
+    if (!syncRun || syncRun.projectId !== projectLaunch.projectId) {
+      throw new ConvexError("The original sync is no longer available");
+    }
+    await ctx.scheduler.runAfter(0, internal.syncActions.runSync, {
+      projectId: projectLaunch.projectId,
+      kind: syncRun.kind,
+      slot: syncRun.slot,
+      launchDay: projectLaunch.launchDay,
+    });
   },
 });
