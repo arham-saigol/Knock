@@ -125,7 +125,12 @@ export const upsertLaunches = internalMutation({
       let launchId: Id<"launches">;
       if (launch) {
         launchId = launch._id;
-        await ctx.db.patch(launchId, { ...input, updatedAt: now });
+        await ctx.db.patch(
+          launchId,
+          launch.source === "api" && input.source === "rss"
+            ? { updatedAt: now }
+            : { ...input, updatedAt: now },
+        );
       } else {
         launchId = await ctx.db.insert("launches", {
           ...input,
