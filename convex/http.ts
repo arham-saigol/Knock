@@ -59,16 +59,17 @@ const firecrawlMonitor = httpAction(async (ctx, request) => {
   });
   if (!project || !project.monitorEnabled)
     return new Response("Ignored", { status: 202 });
-  const registered = await ctx.runMutation(internal.monitoringData.register, {
+  const receivedAt = await ctx.runMutation(internal.monitoringData.register, {
     monitorId,
     checkId,
     projectId: project._id,
   });
-  if (registered) {
+  if (receivedAt !== null) {
     await ctx.scheduler.runAfter(0, internal.monitoringActions.processCheck, {
       monitorId,
       checkId,
       projectId: project._id,
+      receivedAt,
     });
   }
   return new Response("Accepted", { status: 202 });

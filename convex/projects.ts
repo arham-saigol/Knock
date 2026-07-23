@@ -35,6 +35,9 @@ const cleanupPhases = [
   "monitorEvents",
 ] as const;
 const CLEANUP_BATCH_SIZE = 8;
+const contextBuildLeaseMs = 10 * 60_000;
+const contextRecoveryDelayMs = 30_000;
+const maxContextRecoveries = 1;
 
 export const list = query({
   args: {},
@@ -92,6 +95,7 @@ export const create = mutation({
     if (duplicate) throw new ConvexError("A project already uses this domain");
 
     const now = Date.now();
+    const contextStartedAt = now;
     const projectId = await ctx.db.insert("projects", {
       ownerId: identity.subject,
       name,
@@ -101,6 +105,7 @@ export const create = mutation({
       senderEmail,
       brandContext: emptyBrandContext,
       contextGeneration: 1,
+      contextStartedAt,
       settingsRevision: 1,
       contextStatus: "building",
       filterInstructions: "",
@@ -118,7 +123,13 @@ export const create = mutation({
       {
         projectId,
         expectedGeneration: 1,
+        contextStartedAt,
       },
+    );
+    await ctx.scheduler.runAfter(
+      contextBuildLeaseMs,
+      internal.projects.recoverContextBuild,
+      { projectId, expectedGeneration: 1, contextStartedAt },
     );
     return projectId;
   },
@@ -193,6 +204,7 @@ export const update = mutation({
     }
     const contextGeneration =
       project.contextGeneration + (contextChanged || domainChanged ? 1 : 0);
+    const contextStartedAt = domainChanged ? now : undefined;
     const settingsRevision = project.settingsRevision + 1;
     if (contextChanged) {
       await ctx.db.insert("projectContextVersions", {
@@ -210,6 +222,14 @@ export const update = mutation({
       senderEmail,
       brandContext: args.brandContext,
       contextGeneration,
+      contextStartedAt:
+        domainChanged || contextChanged
+          ? contextStartedAt
+          : project.contextStartedAt,
+      contextRecoveryCount:
+        domainChanged || contextChanged
+          ? undefined
+          : project.contextRecoveryCount,
       settingsRevision,
       contextStatus: domainChanged
         ? "building"
@@ -234,6 +254,16 @@ export const update = mutation({
         {
           projectId: project._id,
           expectedGeneration: contextGeneration,
+          contextStartedAt: now,
+        },
+      );
+      await ctx.scheduler.runAfter(
+        contextBuildLeaseMs,
+        internal.projects.recoverContextBuild,
+        {
+          projectId: project._id,
+          expectedGeneration: contextGeneration,
+          contextStartedAt: now,
         },
       );
     }
@@ -266,6 +296,8 @@ export const restoreContext = mutation({
     await ctx.db.patch(args.projectId, {
       brandContext: version.brandContext,
       contextGeneration: project.contextGeneration + 1,
+      contextStartedAt: undefined,
+      contextRecoveryCount: undefined,
       contextStatus: "ready",
       contextError: undefined,
       updatedAt: now,
@@ -409,18 +441,50 @@ export const saveGeneratedContext = internalMutation({
   args: {
     projectId: v.id("projects"),
     expectedGeneration: v.number(),
+    contextStartedAt: v.optional(v.number()),
     brandContext: brandContextValidator,
     source: v.union(v.literal("initial_crawl"), v.literal("monitor_update")),
     changeNote: v.optional(v.string()),
+    monitorEvent: v.optional(
+      v.object({
+        checkId: v.string(),
+        receivedAt: v.number(),
+        changeCount: v.number(),
+      }),
+    ),
   },
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId);
-    if (!project || project.contextGeneration !== args.expectedGeneration)
+    if (
+      !project ||
+      project.contextGeneration !== args.expectedGeneration ||
+      (args.contextStartedAt !== undefined &&
+        project.contextStartedAt !== args.contextStartedAt)
+    )
+      return false;
+    const monitorEventArgs = args.monitorEvent;
+    const monitorEvent = monitorEventArgs
+      ? await ctx.db
+          .query("monitorEvents")
+          .withIndex("by_check", (q) =>
+            q.eq("checkId", monitorEventArgs.checkId),
+          )
+          .unique()
+      : null;
+    if (
+      monitorEventArgs &&
+      (!monitorEvent ||
+        monitorEvent.projectId !== project._id ||
+        monitorEvent.status !== "processing" ||
+        monitorEvent.receivedAt !== monitorEventArgs.receivedAt)
+    )
       return false;
     const now = Date.now();
     await ctx.db.patch(project._id, {
       brandContext: args.brandContext,
       contextGeneration: project.contextGeneration + 1,
+      contextStartedAt: undefined,
+      contextRecoveryCount: undefined,
       contextStatus: "ready",
       contextError: undefined,
       updatedAt: now,
@@ -432,6 +496,14 @@ export const saveGeneratedContext = internalMutation({
       changeNote: args.changeNote,
       createdAt: now,
     });
+    if (monitorEvent && monitorEventArgs) {
+      await ctx.db.patch(monitorEvent._id, {
+        status: "completed",
+        changeCount: monitorEventArgs.changeCount,
+        error: undefined,
+        completedAt: now,
+      });
+    }
     return true;
   },
 });
@@ -440,14 +512,21 @@ export const setContextFailure = internalMutation({
   args: {
     projectId: v.id("projects"),
     expectedGeneration: v.number(),
+    contextStartedAt: v.number(),
     error: v.string(),
   },
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId);
-    if (!project || project.contextGeneration !== args.expectedGeneration)
+    if (
+      !project ||
+      project.contextGeneration !== args.expectedGeneration ||
+      project.contextStartedAt !== args.contextStartedAt
+    )
       return;
     await ctx.db.patch(project._id, {
       contextStatus: "failed",
+      contextStartedAt: undefined,
+      contextRecoveryCount: undefined,
       contextError: args.error.slice(0, 1_000),
       updatedAt: Date.now(),
     });
@@ -460,13 +539,79 @@ export const startContextGeneration = internalMutation({
     const project = await ctx.db.get(args.projectId);
     if (!project) return null;
     const generation = project.contextGeneration + 1;
+    const contextStartedAt = Date.now();
     await ctx.db.patch(project._id, {
       contextGeneration: generation,
+      contextStartedAt,
+      contextRecoveryCount: undefined,
       contextStatus: "building",
       contextError: undefined,
-      updatedAt: Date.now(),
+      updatedAt: contextStartedAt,
     });
-    return generation;
+    await ctx.scheduler.runAfter(
+      contextBuildLeaseMs,
+      internal.projects.recoverContextBuild,
+      {
+        projectId: project._id,
+        expectedGeneration: generation,
+        contextStartedAt,
+      },
+    );
+    return { expectedGeneration: generation, contextStartedAt };
+  },
+});
+
+export const recoverContextBuild = internalMutation({
+  args: {
+    projectId: v.id("projects"),
+    expectedGeneration: v.number(),
+    contextStartedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId);
+    if (
+      !project ||
+      project.contextStatus !== "building" ||
+      project.contextGeneration !== args.expectedGeneration ||
+      project.contextStartedAt !== args.contextStartedAt
+    )
+      return;
+    const recoveryCount = project.contextRecoveryCount ?? 0;
+    const now = Date.now();
+    if (recoveryCount >= maxContextRecoveries) {
+      await ctx.db.patch(project._id, {
+        contextStatus: "failed",
+        contextStartedAt: undefined,
+        contextRecoveryCount: undefined,
+        contextError: "Brand context worker timed out after retrying",
+        updatedAt: now,
+      });
+      return;
+    }
+    await ctx.db.patch(project._id, {
+      contextStartedAt: now,
+      contextRecoveryCount: recoveryCount + 1,
+      contextError: undefined,
+      updatedAt: now,
+    });
+    await ctx.scheduler.runAfter(
+      contextRecoveryDelayMs,
+      internal.projectActions.buildInitialContext,
+      {
+        projectId: project._id,
+        expectedGeneration: args.expectedGeneration,
+        contextStartedAt: now,
+      },
+    );
+    await ctx.scheduler.runAfter(
+      contextRecoveryDelayMs + contextBuildLeaseMs,
+      internal.projects.recoverContextBuild,
+      {
+        projectId: project._id,
+        expectedGeneration: args.expectedGeneration,
+        contextStartedAt: now,
+      },
+    );
   },
 });
 

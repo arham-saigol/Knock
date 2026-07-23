@@ -24,6 +24,8 @@ export default defineSchema({
     senderEmail: v.string(),
     brandContext: brandContextValidator,
     contextGeneration: v.number(),
+    contextStartedAt: v.optional(v.number()),
+    contextRecoveryCount: v.optional(v.number()),
     settingsRevision: v.number(),
     contextStatus: projectStatusValidator,
     contextError: v.optional(v.string()),
@@ -146,7 +148,7 @@ export default defineSchema({
     projectId: v.id("projects"),
     draftId: v.id("drafts"),
     recipientEmail: v.string(),
-    canonicalWebsiteUrl: v.optional(v.string()),
+    companyDomain: v.optional(v.string()),
     attemptNumber: v.number(),
     status: v.union(
       v.literal("sending"),
@@ -166,9 +168,9 @@ export default defineSchema({
       "recipientEmail",
       "status",
     ])
-    .index("by_project_and_canonical_website_and_status", [
+    .index("by_project_and_company_domain_and_status", [
       "projectId",
-      "canonicalWebsiteUrl",
+      "companyDomain",
       "status",
     ]),
 

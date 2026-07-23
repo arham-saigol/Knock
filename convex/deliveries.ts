@@ -8,6 +8,7 @@ import {
   type MutationCtx,
 } from "./_generated/server";
 import { requireIdentity } from "./lib/auth";
+import { rootDomain } from "./lib/urls";
 
 const DELIVERY_LEASE_MS = 5 * 60_000;
 
@@ -61,7 +62,8 @@ export const reserve = mutation({
       throw new ConvexError("Draft contact details are incomplete");
     }
     const recipientEmail = projectLaunch.contactEmail.trim().toLowerCase();
-    const canonicalWebsiteUrl = launch.canonicalWebsiteUrl;
+    const companyUrl = launch.canonicalWebsiteUrl ?? launch.websiteUrl;
+    const companyDomain = companyUrl ? rootDomain(companyUrl) : undefined;
     const attempts = await ctx.db
       .query("deliveryAttempts")
       .withIndex("by_draft", (q) => q.eq("draftId", draft._id))
@@ -96,14 +98,14 @@ export const reserve = mutation({
           )
           .first(),
       ),
-      ...(canonicalWebsiteUrl
+      ...(companyDomain
         ? blockingStatuses.map((status) =>
             ctx.db
               .query("deliveryAttempts")
-              .withIndex("by_project_and_canonical_website_and_status", (q) =>
+              .withIndex("by_project_and_company_domain_and_status", (q) =>
                 q
                   .eq("projectId", project._id)
-                  .eq("canonicalWebsiteUrl", canonicalWebsiteUrl)
+                  .eq("companyDomain", companyDomain)
                   .eq("status", status),
               )
               .first(),
@@ -121,7 +123,7 @@ export const reserve = mutation({
       projectId: project._id,
       draftId: draft._id,
       recipientEmail,
-      canonicalWebsiteUrl,
+      companyDomain,
       attemptNumber: attempts.length + 1,
       status: "sending",
       startedAt: now,

@@ -40,15 +40,15 @@ export const rebuildContext = action({
       await ctx.runQuery(internal.projects.getInternal, args),
       identity.subject,
     );
-    const expectedGeneration: number | null = await ctx.runMutation(
+    const generation = await ctx.runMutation(
       internal.projects.startContextGeneration,
       args,
     );
-    if (expectedGeneration === null) return null;
+    if (generation === null) return null;
     const brandContext: z.infer<typeof brandContextSchema> | null =
       await ctx.runAction(internal.projectActions.buildInitialContext, {
         ...args,
-        expectedGeneration,
+        ...generation,
       });
     return brandContext;
   },
@@ -58,13 +58,18 @@ export const buildInitialContext = internalAction({
   args: {
     projectId: v.id("projects"),
     expectedGeneration: v.number(),
+    contextStartedAt: v.number(),
   },
   handler: async (
     ctx,
     args,
   ): Promise<z.infer<typeof brandContextSchema> | null> => {
     const project = await ctx.runQuery(internal.projects.getInternal, args);
-    if (!project || project.contextGeneration !== args.expectedGeneration)
+    if (
+      !project ||
+      project.contextGeneration !== args.expectedGeneration ||
+      project.contextStartedAt !== args.contextStartedAt
+    )
       return null;
     try {
       const content = await crawlProjectWebsite(project.domain);
@@ -80,6 +85,7 @@ export const buildInitialContext = internalAction({
         {
           projectId: project._id,
           expectedGeneration: args.expectedGeneration,
+          contextStartedAt: args.contextStartedAt,
           brandContext,
           source: "initial_crawl",
           changeNote:
@@ -91,6 +97,7 @@ export const buildInitialContext = internalAction({
       await ctx.runMutation(internal.projects.setContextFailure, {
         projectId: project._id,
         expectedGeneration: args.expectedGeneration,
+        contextStartedAt: args.contextStartedAt,
         error: errorMessage(error),
       });
       return null;

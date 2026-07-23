@@ -44,6 +44,7 @@ export const processCheck = internalAction({
     monitorId: v.string(),
     checkId: v.string(),
     projectId: v.id("projects"),
+    receivedAt: v.number(),
   },
   handler: async (ctx, args) => {
     const project = await ctx.runQuery(internal.projects.getInternal, {
@@ -56,6 +57,7 @@ export const processCheck = internalAction({
     ) {
       await ctx.runMutation(internal.monitoringData.fail, {
         checkId: args.checkId,
+        receivedAt: args.receivedAt,
         error: "Monitor was disabled or replaced before this check completed",
         retryable: false,
       });
@@ -72,6 +74,7 @@ export const processCheck = internalAction({
       if (changes.length === 0) {
         await ctx.runMutation(internal.monitoringData.complete, {
           checkId: args.checkId,
+          receivedAt: args.receivedAt,
           changeCount: 0,
         });
         return;
@@ -95,6 +98,11 @@ export const processCheck = internalAction({
           brandContext,
           source: "monitor_update",
           changeNote: `Updated from Firecrawl Monitor check ${args.checkId}.`,
+          monitorEvent: {
+            checkId: args.checkId,
+            receivedAt: args.receivedAt,
+            changeCount: changes.length,
+          },
         },
       );
       if (!saved) {
@@ -102,13 +110,10 @@ export const processCheck = internalAction({
           "Project context changed while the monitor update was running",
         );
       }
-      await ctx.runMutation(internal.monitoringData.complete, {
-        checkId: args.checkId,
-        changeCount: changes.length,
-      });
     } catch (error) {
       await ctx.runMutation(internal.monitoringData.fail, {
         checkId: args.checkId,
+        receivedAt: args.receivedAt,
         error: errorMessage(error),
       });
     }
