@@ -42,14 +42,11 @@ export function ReviewQueue({
     [];
   const current = active[0];
   const [edits, setEdits] = useState<
-    Record<string, { subject: string; body: string }>
+    Record<string, { subject: string; body: string; version: number }>
   >({});
   const [acknowledged, setAcknowledged] = useState<
-    Record<string, { subject: string; body: string }>
+    Record<string, { subject: string; body: string; version: number }>
   >({});
-  const [savedVersions, setSavedVersions] = useState<Record<string, number>>(
-    {},
-  );
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">(
     "saved",
   );
@@ -58,13 +55,14 @@ export function ReviewQueue({
   const [busy, setBusy] = useState<"skip" | "send">();
   const [error, setError] = useState("");
 
-  const currentEdit = current ? edits[current.draft._id] : undefined;
+  const storedEdit = current ? edits[current.draft._id] : undefined;
+  const hasVersionConflict = Boolean(
+    current && storedEdit && current.draft.version > storedEdit.version,
+  );
+  const currentEdit = hasVersionConflict ? undefined : storedEdit;
   const currentDraftId = current?.draft._id;
   const currentDraftVersion = current
-    ? Math.max(
-        current.draft.version,
-        savedVersions[current.draft._id] ?? current.draft.version,
-      )
+    ? Math.max(current.draft.version, currentEdit?.version ?? 0)
     : undefined;
   const subject = currentEdit?.subject ?? current?.draft.subject ?? "";
   const body = currentEdit?.body ?? current?.draft.body ?? "";
@@ -76,7 +74,9 @@ export function ReviewQueue({
   const isSaved =
     !saveInFlight &&
     (!currentEdit ||
-      (currentAcknowledged?.subject === subject &&
+      (currentAcknowledged &&
+        currentAcknowledged.version === currentDraftVersion &&
+        currentAcknowledged.subject === subject &&
         currentAcknowledged.body === body));
 
   useEffect(() => {
@@ -89,7 +89,12 @@ export function ReviewQueue({
       return;
     if (saveInFlight || saveState === "error") return;
     const saved = acknowledged[currentDraftId];
-    if (saved?.subject === editedSubject && saved.body === editedBody) return;
+    if (
+      saved?.version === currentDraftVersion &&
+      saved.subject === editedSubject &&
+      saved.body === editedBody
+    )
+      return;
     const timeout = window.setTimeout(() => {
       const revision = editRevision.current;
       setSaveInFlight(true);
@@ -100,15 +105,21 @@ export function ReviewQueue({
         body: editedBody,
       })
         .then((nextVersion) => {
-          setSavedVersions((previous) => ({
-            ...previous,
-            [currentDraftId]: nextVersion,
-          }));
+          setEdits((previous) => {
+            const edit = previous[currentDraftId];
+            return edit
+              ? {
+                  ...previous,
+                  [currentDraftId]: { ...edit, version: nextVersion },
+                }
+              : previous;
+          });
           setAcknowledged((previous) => ({
             ...previous,
             [currentDraftId]: {
               subject: editedSubject,
               body: editedBody,
+              version: nextVersion,
             },
           }));
           setSaveState("saved");
@@ -136,7 +147,11 @@ export function ReviewQueue({
     setSaveState("saving");
     setEdits((previous) => ({
       ...previous,
-      [current.draft._id]: { subject: value, body },
+      [current.draft._id]: {
+        subject: value,
+        body,
+        version: currentEdit?.version ?? current.draft.version,
+      },
     }));
   }
 
@@ -146,7 +161,11 @@ export function ReviewQueue({
     setSaveState("saving");
     setEdits((previous) => ({
       ...previous,
-      [current.draft._id]: { subject, body: value },
+      [current.draft._id]: {
+        subject,
+        body: value,
+        version: currentEdit?.version ?? current.draft.version,
+      },
     }));
   }
 

@@ -3,6 +3,8 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalMutation, internalQuery } from "./_generated/server";
 
+const draftLeaseMs = 10 * 60_000;
+
 export const claim = internalMutation({
   args: { projectLaunchId: v.id("projectLaunches") },
   handler: async (ctx, args) => {
@@ -45,7 +47,38 @@ export const claim = internalMutation({
       draftStartedAt: now,
       updatedAt: now,
     });
+    await ctx.scheduler.runAfter(
+      draftLeaseMs,
+      internal.draftData.recoverLease,
+      {
+        projectLaunchId: projectLaunch._id,
+        draftStartedAt: now,
+      },
+    );
     return now;
+  },
+});
+
+export const recoverLease = internalMutation({
+  args: {
+    projectLaunchId: v.id("projectLaunches"),
+    draftStartedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const projectLaunch = await ctx.db.get(args.projectLaunchId);
+    if (
+      !projectLaunch ||
+      projectLaunch.stage !== "drafting" ||
+      projectLaunch.draftStartedAt !== args.draftStartedAt
+    )
+      return;
+    await ctx.db.patch(projectLaunch._id, {
+      draftStartedAt: undefined,
+      updatedAt: Date.now(),
+    });
+    await ctx.scheduler.runAfter(0, internal.draftActions.generateDraft, {
+      projectLaunchId: projectLaunch._id,
+    });
   },
 });
 

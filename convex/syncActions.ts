@@ -133,9 +133,11 @@ export const runSync = internalAction({
       projectId: project._id,
       launchDay: day,
       kind: args.kind,
+      slot: args.slot,
     });
     if (!begun?.shouldRun) return { started: false };
 
+    let filterStartedAt: number | undefined;
     try {
       let launches;
       try {
@@ -169,7 +171,8 @@ export const runSync = internalAction({
       const claimed = await ctx.runMutation(internal.syncData.claimFilterCall, {
         runId: begun.runId,
       });
-      if (!claimed) return { started: false };
+      if (claimed === null) return { started: false };
+      filterStartedAt = claimed;
 
       const rawDecisions = await filterLaunches({ project, candidates });
       const candidateIds = new Map(
@@ -193,12 +196,14 @@ export const runSync = internalAction({
       });
       await ctx.runMutation(internal.syncData.applyFilters, {
         runId: begun.runId,
+        filterStartedAt,
         decisions,
       });
       return { started: true };
     } catch (error) {
       await ctx.runMutation(internal.syncData.fail, {
         runId: begun.runId,
+        filterStartedAt,
         error: errorMessage(error),
       });
       throw error;

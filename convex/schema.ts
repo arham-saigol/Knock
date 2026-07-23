@@ -160,6 +160,7 @@ export default defineSchema({
 
   syncRuns: defineTable({
     key: v.string(),
+    slot: v.string(),
     ownerId: v.string(),
     projectId: v.id("projects"),
     launchDay: v.string(),

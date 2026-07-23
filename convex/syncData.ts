@@ -5,6 +5,8 @@ import type { Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery } from "./_generated/server";
 import { syncKindValidator } from "./validators";
 
+const filterLeaseMs = 10 * 60_000;
+
 const launchInput = v.object({
   productHuntId: v.optional(v.string()),
   name: v.string(),
@@ -33,6 +35,7 @@ export const begin = internalMutation({
     projectId: v.id("projects"),
     launchDay: v.string(),
     kind: syncKindValidator,
+    slot: v.string(),
   },
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId);
@@ -62,6 +65,7 @@ export const begin = internalMutation({
     }
     const runId = await ctx.db.insert("syncRuns", {
       key: args.key,
+      slot: args.slot,
       ownerId: project.ownerId,
       projectId: project._id,
       launchDay: args.launchDay,
@@ -99,7 +103,7 @@ export const upsertLaunches = internalMutation({
             )
             .unique()
         : null;
-      if (!launch && input.canonicalWebsiteUrl) {
+      if (!launch && !input.productHuntId && input.canonicalWebsiteUrl) {
         launch = await ctx.db
           .query("launches")
           .withIndex("by_canonical_website", (q) =>
@@ -197,15 +201,48 @@ export const claimFilterCall = internalMutation({
   args: { runId: v.id("syncRuns") },
   handler: async (ctx, args) => {
     const run = await ctx.db.get(args.runId);
-    if (!run || run.filterStartedAt) return false;
-    await ctx.db.patch(run._id, { filterStartedAt: Date.now() });
-    return true;
+    if (!run || run.filterStartedAt) return null;
+    const filterStartedAt = Date.now();
+    await ctx.db.patch(run._id, { filterStartedAt });
+    await ctx.scheduler.runAfter(
+      filterLeaseMs,
+      internal.syncData.recoverFilterLease,
+      { runId: run._id, filterStartedAt },
+    );
+    return filterStartedAt;
+  },
+});
+
+export const recoverFilterLease = internalMutation({
+  args: { runId: v.id("syncRuns"), filterStartedAt: v.number() },
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (
+      !run ||
+      run.status !== "running" ||
+      run.filterStartedAt !== args.filterStartedAt
+    )
+      return;
+    const now = Date.now();
+    await ctx.db.patch(run._id, {
+      status: "failed",
+      filterStartedAt: undefined,
+      error: "Filter worker lease expired",
+      completedAt: now,
+    });
+    await ctx.scheduler.runAfter(0, internal.syncActions.runSync, {
+      projectId: run.projectId,
+      kind: run.kind,
+      slot: run.slot,
+      launchDay: run.launchDay,
+    });
   },
 });
 
 export const applyFilters = internalMutation({
   args: {
     runId: v.id("syncRuns"),
+    filterStartedAt: v.number(),
     decisions: v.array(
       v.object({
         projectLaunchId: v.id("projectLaunches"),
@@ -216,7 +253,12 @@ export const applyFilters = internalMutation({
   },
   handler: async (ctx, args) => {
     const run = await ctx.db.get(args.runId);
-    if (!run) return;
+    if (
+      !run ||
+      run.status !== "running" ||
+      run.filterStartedAt !== args.filterStartedAt
+    )
+      return;
     const candidates = await ctx.db
       .query("projectLaunches")
       .withIndex("by_sync_stage", (q) =>
@@ -273,10 +315,14 @@ export const applyFilters = internalMutation({
 });
 
 export const fail = internalMutation({
-  args: { runId: v.id("syncRuns"), error: v.string() },
+  args: {
+    runId: v.id("syncRuns"),
+    filterStartedAt: v.optional(v.number()),
+    error: v.string(),
+  },
   handler: async (ctx, args) => {
     const run = await ctx.db.get(args.runId);
-    if (!run) return;
+    if (!run || run.filterStartedAt !== args.filterStartedAt) return;
     const candidates = await ctx.db
       .query("projectLaunches")
       .withIndex("by_sync_stage", (q) =>
