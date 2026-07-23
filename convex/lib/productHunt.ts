@@ -1,7 +1,9 @@
 import * as cheerio from "cheerio";
 import { XMLParser } from "fast-xml-parser";
 import { lookup } from "node:dns/promises";
-import { BlockList, isIP } from "node:net";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
+import { BlockList, isIP, type LookupFunction } from "node:net";
 
 import { productHuntDayBounds } from "./time";
 import { normalizeWebsiteUrl } from "./urls";
@@ -58,7 +60,48 @@ async function assertPublicHttpUrl(value: string) {
   ) {
     throw new Error("Redirect target resolved to a non-public address");
   }
-  return url;
+  return { url, addresses };
+}
+
+function requestPinnedHttpUrl(
+  url: URL,
+  addresses: { address: string; family: number }[],
+) {
+  return new Promise<{ status: number; location?: string }>(
+    (resolve, reject) => {
+      const pinnedLookup: LookupFunction = (_hostname, options, callback) => {
+        if (options.all) {
+          callback(null, addresses);
+          return;
+        }
+        const [address] = addresses;
+        if (!address) {
+          callback(new Error("No validated address available"), "");
+          return;
+        }
+        callback(null, address.address, address.family);
+      };
+      const request = (url.protocol === "https:" ? httpsRequest : httpRequest)(
+        url,
+        {
+          method: "GET",
+          headers: {
+            "User-Agent": "Knock/1.0 (+private outreach research app)",
+          },
+          signal: AbortSignal.timeout(20_000),
+          lookup: pinnedLookup,
+        },
+        (response) => {
+          const status = response.statusCode ?? 0;
+          const location = response.headers.location;
+          response.destroy();
+          resolve({ status, location });
+        },
+      );
+      request.once("error", reject);
+      request.end();
+    },
+  );
 }
 
 export type ProductHuntLaunch = {
@@ -242,20 +285,16 @@ async function resolveProductUrl(
   try {
     let currentUrl = new URL(redirectUrl);
     for (let redirectCount = 0; redirectCount <= 5; redirectCount += 1) {
-      currentUrl = await assertPublicHttpUrl(currentUrl.toString());
-      const response = await fetch(currentUrl, {
-        redirect: "manual",
-        headers: {
-          "User-Agent": "Knock/1.0 (+private outreach research app)",
-        },
-        signal: AbortSignal.timeout(20_000),
-      });
+      const validated = await assertPublicHttpUrl(currentUrl.toString());
+      currentUrl = validated.url;
+      const response = await requestPinnedHttpUrl(
+        currentUrl,
+        validated.addresses,
+      );
       if (response.status < 300 || response.status >= 400) {
-        await response.body?.cancel();
         return normalizeOfficialWebsiteUrl(currentUrl.toString());
       }
-      const location = response.headers.get("location");
-      await response.body?.cancel();
+      const { location } = response;
       if (!location || redirectCount === 5) return undefined;
       currentUrl = new URL(location, currentUrl);
     }
