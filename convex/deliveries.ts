@@ -7,7 +7,7 @@ import {
   mutation,
   type MutationCtx,
 } from "./_generated/server";
-import { requireIdentity } from "./lib/auth";
+import { isIdentityOwner, requireIdentity } from "./lib/auth";
 import { rootDomain } from "./lib/urls";
 
 const DELIVERY_LEASE_MS = 5 * 60_000;
@@ -48,7 +48,7 @@ export const reserve = mutation({
     const draft = await ctx.db.get(args.draftId);
     if (
       !draft ||
-      draft.ownerId !== identity.subject ||
+      !isIdentityOwner(draft, identity) ||
       draft.status !== "ready"
     ) {
       throw new ConvexError("Draft is no longer available");
@@ -120,6 +120,7 @@ export const reserve = mutation({
     const now = Date.now();
     const attemptId = await ctx.db.insert("deliveryAttempts", {
       ownerId: identity.subject,
+      ownerTokenIdentifier: identity.tokenIdentifier,
       projectId: project._id,
       draftId: draft._id,
       recipientEmail,
@@ -152,7 +153,7 @@ export const markSmtpStarted = mutation({
     const attempt = await ctx.db.get(args.attemptId);
     if (
       !attempt ||
-      attempt.ownerId !== identity.subject ||
+      !isIdentityOwner(attempt, identity) ||
       attempt.status !== "sending"
     ) {
       throw new ConvexError("Delivery attempt is no longer active");
@@ -171,7 +172,7 @@ export const complete = mutation({
     const attempt = await ctx.db.get(args.attemptId);
     if (
       !attempt ||
-      attempt.ownerId !== identity.subject ||
+      !isIdentityOwner(attempt, identity) ||
       attempt.status !== "sending"
     ) {
       throw new ConvexError("Delivery attempt is no longer active");
@@ -206,7 +207,7 @@ export const fail = mutation({
     const attempt = await ctx.db.get(args.attemptId);
     if (
       !attempt ||
-      attempt.ownerId !== identity.subject ||
+      !isIdentityOwner(attempt, identity) ||
       attempt.status !== "sending"
     )
       return;
@@ -230,7 +231,7 @@ export const markUnknown = mutation({
     const attempt = await ctx.db.get(args.attemptId);
     if (
       !attempt ||
-      attempt.ownerId !== identity.subject ||
+      !isIdentityOwner(attempt, identity) ||
       attempt.status !== "sending"
     )
       return;

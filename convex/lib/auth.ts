@@ -2,6 +2,7 @@ import { ConvexError } from "convex/values";
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { ActionCtx, MutationCtx, QueryCtx } from "../_generated/server";
+import type { UserIdentity } from "convex/server";
 
 type AuthReader = Pick<ActionCtx | MutationCtx | QueryCtx, "auth">;
 
@@ -15,6 +16,38 @@ export async function requireIdentity(ctx: AuthReader) {
   }
   assertAllowedUser(identity.subject);
   return identity;
+}
+
+type OwnedDocument = Pick<Doc<"projects">, "ownerId" | "ownerTokenIdentifier">;
+type OwnerIdentity = Pick<
+  UserIdentity,
+  "issuer" | "subject" | "tokenIdentifier"
+>;
+
+export function isIdentityOwner(
+  document: OwnedDocument,
+  identity: OwnerIdentity,
+) {
+  if (document.ownerTokenIdentifier !== undefined) {
+    return document.ownerTokenIdentifier === identity.tokenIdentifier;
+  }
+
+  return (
+    document.ownerId === identity.subject &&
+    identity.issuer === process.env.CLERK_JWT_ISSUER_DOMAIN
+  );
+}
+
+export function ownerTokenIdentifierFor(document: OwnedDocument) {
+  if (document.ownerTokenIdentifier !== undefined) {
+    return document.ownerTokenIdentifier;
+  }
+
+  const issuer = process.env.CLERK_JWT_ISSUER_DOMAIN;
+  if (!issuer) {
+    throw new ConvexError("CLERK_JWT_ISSUER_DOMAIN is not configured");
+  }
+  return `${issuer}|${document.ownerId}`;
 }
 
 export function assertAllowedUser(subject: string) {
@@ -36,7 +69,7 @@ export async function requireProject(
 ) {
   const identity = await requireIdentity(ctx);
   const project = await ctx.db.get(projectId);
-  if (!project || project.ownerId !== identity.subject) {
+  if (!project || !isIdentityOwner(project, identity)) {
     throw new ConvexError("Project not found");
   }
   return project;
@@ -44,9 +77,9 @@ export async function requireProject(
 
 export function assertProjectOwner(
   project: Doc<"projects"> | null,
-  ownerId: string,
+  identity: OwnerIdentity,
 ) {
-  if (!project || project.ownerId !== ownerId) {
+  if (!project || !isIdentityOwner(project, identity)) {
     throw new ConvexError("Project not found");
   }
   return project;

@@ -5,7 +5,7 @@ import { z } from "zod";
 
 import { internal } from "./_generated/api";
 import { action, internalAction } from "./_generated/server";
-import { assertAllowedUser } from "./lib/auth";
+import { assertAllowedUser, isIdentityOwner } from "./lib/auth";
 import { fetchProductHuntApi, fetchProductHuntRss } from "./lib/productHunt";
 import { errorMessage } from "./lib/strings";
 import { productHuntDay } from "./lib/time";
@@ -101,7 +101,7 @@ export const manualSync = action({
     if (!identity) throw new ConvexError("Authentication required");
     assertAllowedUser(identity.subject);
     const project = await ctx.runQuery(internal.projects.getInternal, args);
-    if (!project || project.ownerId !== identity.subject)
+    if (!project || !isIdentityOwner(project, identity))
       throw new ConvexError("Project not found");
     if (project.contextStatus !== "ready") {
       throw new ConvexError(

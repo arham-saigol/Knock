@@ -7,6 +7,7 @@ import {
   internalQuery,
   type MutationCtx,
 } from "./_generated/server";
+import { ownerTokenIdentifierFor } from "./lib/auth";
 
 const draftLeaseMs = 10 * 60_000;
 const draftRecoveryDelayMs = 30_000;
@@ -148,6 +149,7 @@ export const save = internalMutation({
     if (!existing) {
       await ctx.db.insert("drafts", {
         ownerId: projectLaunch.ownerId,
+        ownerTokenIdentifier: ownerTokenIdentifierFor(projectLaunch),
         projectId: projectLaunch.projectId,
         projectLaunchId: projectLaunch._id,
         launchId: projectLaunch.launchId,

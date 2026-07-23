@@ -1,3 +1,5 @@
+"use node";
+
 import * as cheerio from "cheerio";
 import { XMLParser } from "fast-xml-parser";
 import { lookup } from "node:dns/promises";

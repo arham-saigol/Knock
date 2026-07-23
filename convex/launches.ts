@@ -4,7 +4,7 @@ import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
-import { requireIdentity, requireProject } from "./lib/auth";
+import { isIdentityOwner, requireIdentity, requireProject } from "./lib/auth";
 import { cleanSingleLine } from "./lib/strings";
 
 async function joinLaunch(
@@ -82,7 +82,7 @@ export const updateDraft = mutation({
     const draft = await ctx.db.get(args.draftId);
     if (
       !draft ||
-      draft.ownerId !== identity.subject ||
+      !isIdentityOwner(draft, identity) ||
       draft.status !== "ready"
     ) {
       throw new ConvexError("Draft is no longer editable");
@@ -113,7 +113,7 @@ export const skip = mutation({
     const draft = await ctx.db.get(args.draftId);
     if (
       !draft ||
-      draft.ownerId !== identity.subject ||
+      !isIdentityOwner(draft, identity) ||
       draft.status !== "ready"
     ) {
       throw new ConvexError("Draft is no longer available");
@@ -149,7 +149,7 @@ export const retry = mutation({
     const projectLaunch = await ctx.db.get(args.projectLaunchId);
     if (
       !projectLaunch ||
-      projectLaunch.ownerId !== identity.subject ||
+      !isIdentityOwner(projectLaunch, identity) ||
       projectLaunch.status !== "failed"
     ) {
       throw new ConvexError("Launch is not available for retry");

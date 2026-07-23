@@ -16,7 +16,9 @@ import {
 
 export default defineSchema({
   projects: defineTable({
+    // Retained as the indexed Clerk-subject lookup during the ownership migration.
     ownerId: v.string(),
+    ownerTokenIdentifier: v.optional(v.string()),
     name: v.string(),
     domain: v.string(),
     canonicalDomain: v.string(),
@@ -86,7 +88,9 @@ export default defineSchema({
     .index("by_launch_day", ["launchDay", "launchedAt"]),
 
   projectLaunches: defineTable({
+    // Retained as the indexed Clerk-subject lookup during the ownership migration.
     ownerId: v.string(),
+    ownerTokenIdentifier: v.optional(v.string()),
     projectId: v.id("projects"),
     launchId: v.id("launches"),
     syncRunId: v.id("syncRuns"),
@@ -123,7 +127,9 @@ export default defineSchema({
     .index("by_owner_day", ["ownerId", "launchDay"]),
 
   drafts: defineTable({
+    // Retained as the indexed Clerk-subject lookup during the ownership migration.
     ownerId: v.string(),
+    ownerTokenIdentifier: v.optional(v.string()),
     projectId: v.id("projects"),
     projectLaunchId: v.id("projectLaunches"),
     launchId: v.id("launches"),
@@ -150,7 +156,9 @@ export default defineSchema({
     .index("by_status_and_delete_at", ["status", "deleteAt"]),
 
   deliveryAttempts: defineTable({
+    // Retained as the indexed Clerk-subject lookup during the ownership migration.
     ownerId: v.string(),
+    ownerTokenIdentifier: v.optional(v.string()),
     projectId: v.id("projects"),
     draftId: v.id("drafts"),
     recipientEmail: v.string(),
@@ -184,7 +192,9 @@ export default defineSchema({
   syncRuns: defineTable({
     key: v.string(),
     slot: v.string(),
+    // Retained as the indexed Clerk-subject lookup during the ownership migration.
     ownerId: v.string(),
+    ownerTokenIdentifier: v.optional(v.string()),
     projectId: v.id("projects"),
     launchDay: v.string(),
     kind: syncKindValidator,

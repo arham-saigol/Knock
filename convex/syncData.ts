@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery } from "./_generated/server";
+import { ownerTokenIdentifierFor } from "./lib/auth";
 import { syncKindValidator } from "./validators";
 
 const filterLeaseMs = 10 * 60_000;
@@ -70,6 +71,7 @@ export const begin = internalMutation({
       key: args.key,
       slot: args.slot,
       ownerId: project.ownerId,
+      ownerTokenIdentifier: ownerTokenIdentifierFor(project),
       projectId: project._id,
       launchDay: args.launchDay,
       kind: args.kind,
@@ -167,6 +169,7 @@ export const upsertLaunches = internalMutation({
 
       const projectLaunchId = await ctx.db.insert("projectLaunches", {
         ownerId: project.ownerId,
+        ownerTokenIdentifier: ownerTokenIdentifierFor(project),
         projectId: project._id,
         launchId,
         syncRunId: run._id,

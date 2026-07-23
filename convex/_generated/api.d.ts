@@ -24,6 +24,7 @@ import type * as lib_strings from "../lib/strings.js";
 import type * as lib_time from "../lib/time.js";
 import type * as lib_tinyfish from "../lib/tinyfish.js";
 import type * as lib_urls from "../lib/urls.js";
+import type * as migrations from "../migrations.js";
 import type * as monitoringActions from "../monitoringActions.js";
 import type * as monitoringData from "../monitoringData.js";
 import type * as projectActions from "../projectActions.js";
@@ -58,6 +59,7 @@ declare const fullApi: ApiFromModules<{
   "lib/time": typeof lib_time;
   "lib/tinyfish": typeof lib_tinyfish;
   "lib/urls": typeof lib_urls;
+  migrations: typeof migrations;
   monitoringActions: typeof monitoringActions;
   monitoringData: typeof monitoringData;
   projectActions: typeof projectActions;
@@ -96,4 +98,6 @@ export declare const internal: FilterApi<
   FunctionReference<any, "internal">
 >;
 
-export declare const components: {};
+export declare const components: {
+  migrations: import("@convex-dev/migrations/_generated/component.js").ComponentApi<"migrations">;
+};

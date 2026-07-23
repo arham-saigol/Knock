@@ -38,7 +38,7 @@ export const rebuildContext = action({
     const identity = await requireIdentity(ctx);
     assertProjectOwner(
       await ctx.runQuery(internal.projects.getInternal, args),
-      identity.subject,
+      identity,
     );
     const generation = await ctx.runMutation(
       internal.projects.startContextGeneration,

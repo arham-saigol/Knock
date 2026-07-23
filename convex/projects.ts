@@ -9,7 +9,7 @@ import {
   mutation,
   query,
 } from "./_generated/server";
-import { requireIdentity, requireProject } from "./lib/auth";
+import { isIdentityOwner, requireIdentity, requireProject } from "./lib/auth";
 import { cleanSingleLine } from "./lib/strings";
 import { normalizeDomain, validateSenderDomain } from "./lib/urls";
 import {
@@ -43,11 +43,17 @@ export const list = query({
   args: { paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
     const identity = await requireIdentity(ctx);
-    return ctx.db
+    const projects = await ctx.db
       .query("projects")
       .withIndex("by_owner", (q) => q.eq("ownerId", identity.subject))
       .order("desc")
       .paginate(args.paginationOpts);
+    return {
+      ...projects,
+      page: projects.page.filter((project) =>
+        isIdentityOwner(project, identity),
+      ),
+    };
   },
 });
 
@@ -56,7 +62,7 @@ export const selected = query({
   handler: async (ctx, args) => {
     const identity = await requireIdentity(ctx);
     const project = await ctx.db.get(args.projectId);
-    return project?.ownerId === identity.subject ? project : null;
+    return project && isIdentityOwner(project, identity) ? project : null;
   },
 });
 
@@ -103,6 +109,9 @@ export const create = mutation({
           .eq("ownerId", identity.subject)
           .eq("canonicalDomain", canonicalDomain),
       )
+      .filter((q) =>
+        q.eq(q.field("ownerTokenIdentifier"), identity.tokenIdentifier),
+      )
       .unique();
     if (duplicate) throw new ConvexError("A project already uses this domain");
 
@@ -110,6 +119,7 @@ export const create = mutation({
     const contextStartedAt = now;
     const projectId = await ctx.db.insert("projects", {
       ownerId: identity.subject,
+      ownerTokenIdentifier: identity.tokenIdentifier,
       name,
       domain: `https://${canonicalDomain}`,
       canonicalDomain,

@@ -100,6 +100,15 @@ Knock requires each project sender in `SPACEMAIL_ALLOWED_SENDERS`. If SMTP accep
 5. Disable public sign-up in Clerk and set the owner's Clerk ID in `KNOCK_ALLOWED_USER_IDS`.
 6. Verify Firecrawl created monitors point to the production `.convex.site/firecrawl-monitor` URL.
 
+Existing deployments that stored bare Clerk subjects as ownership keys should
+backfill the canonical issuer-qualified identifiers immediately after deploying
+the widened schema:
+
+```bash
+npx convex run migrations:migrateOwnerTokenIdentifiers '{"dryRun":true}' --prod
+npx convex run migrations:migrateOwnerTokenIdentifiers --prod
+```
+
 ## Commands
 
 ```bash
