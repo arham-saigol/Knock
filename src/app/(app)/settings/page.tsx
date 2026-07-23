@@ -1,6 +1,6 @@
 "use client";
 
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, usePaginatedQuery } from "convex/react";
 import {
   AlertTriangle,
   History,
@@ -82,9 +82,15 @@ function SettingsForm({ project }: { project: Doc<"projects"> }) {
   const removeProject = useMutation(api.projects.remove);
   const restoreContext = useMutation(api.projects.restoreContext);
   const rebuildContext = useAction(api.projectActions.rebuildContext);
-  const versions = useQuery(api.projects.contextVersions, {
-    projectId: project._id,
-  });
+  const {
+    results: versions,
+    status: versionPaginationStatus,
+    loadMore: loadMoreVersions,
+  } = usePaginatedQuery(
+    api.projects.contextVersions,
+    { projectId: project._id },
+    { initialNumItems: 20 },
+  );
   const [name, setName] = useState(project.name);
   const [domain, setDomain] = useState(project.domain);
   const [senderName, setSenderName] = useState(project.senderName);
@@ -487,36 +493,53 @@ function SettingsForm({ project }: { project: Doc<"projects"> }) {
         description="Inspect or restore any previous version."
       >
         <div className="grid gap-2">
-          {versions === undefined ? (
+          {versionPaginationStatus === "LoadingFirstPage" ? (
             <Skeleton className="h-16 rounded-none" />
           ) : versions.length ? (
-            versions.map((version) => (
-              <details
-                key={version._id}
-                className="group border-foreground bg-card border-2 p-4"
-              >
-                <summary className="flex cursor-pointer list-none items-center gap-3 text-sm font-bold">
-                  <History className="size-4" />
-                  <span>{new Date(version.createdAt).toLocaleString()}</span>
-                  <span className="text-muted-foreground font-mono text-[10px] font-medium uppercase">
-                    {version.source.replaceAll("_", " ")}
-                  </span>
-                </summary>
-                <pre className="border-foreground mt-4 max-h-72 overflow-auto border-t pt-4 font-mono text-[11px] leading-5 whitespace-pre-wrap">
-                  {JSON.stringify(version.brandContext, null, 2)}
-                </pre>
+            <>
+              {versions.map((version) => (
+                <details
+                  key={version._id}
+                  className="group border-foreground bg-card border-2 p-4"
+                >
+                  <summary className="flex cursor-pointer list-none items-center gap-3 text-sm font-bold">
+                    <History className="size-4" />
+                    <span>{new Date(version.createdAt).toLocaleString()}</span>
+                    <span className="text-muted-foreground font-mono text-[10px] font-medium uppercase">
+                      {version.source.replaceAll("_", " ")}
+                    </span>
+                  </summary>
+                  <pre className="border-foreground mt-4 max-h-72 overflow-auto border-t pt-4 font-mono text-[11px] leading-5 whitespace-pre-wrap">
+                    {JSON.stringify(version.brandContext, null, 2)}
+                  </pre>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="border-foreground mt-4 border-2"
+                    onClick={() =>
+                      void restore(version._id, version.brandContext)
+                    }
+                  >
+                    <RotateCcw /> Restore this version
+                  </Button>
+                </details>
+              ))}
+              {versionPaginationStatus === "CanLoadMore" ||
+              versionPaginationStatus === "LoadingMore" ? (
                 <Button
                   type="button"
                   variant="outline"
-                  className="border-foreground mt-4 border-2"
-                  onClick={() =>
-                    void restore(version._id, version.brandContext)
-                  }
+                  onClick={() => loadMoreVersions(20)}
+                  disabled={versionPaginationStatus === "LoadingMore"}
+                  className="border-foreground border-2"
                 >
-                  <RotateCcw /> Restore this version
+                  {versionPaginationStatus === "LoadingMore" ? (
+                    <LoaderCircle className="animate-spin" />
+                  ) : null}
+                  Load more history
                 </Button>
-              </details>
-            ))
+              ) : null}
+            </>
           ) : (
             <p className="text-muted-foreground text-sm">
               No saved context versions yet.

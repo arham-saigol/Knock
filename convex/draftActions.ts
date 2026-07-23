@@ -17,14 +17,20 @@ const stopSlopRules = `
 Write direct human prose. Cut filler openers, emphasis crutches, business jargon, adverbs, hedges, and meta-commentary. Use active voice and name the human actor. Address the recipient as "you" instead of narrating from a distance. Be specific and avoid lazy extremes such as every, always, and never. Vary sentence length without dramatic fragments. Do not use em dashes, formulaic binary contrasts, negative-listing reveals, rhetorical setups, false agency, vague declarations, three-item rhetorical lists, or pull-quote language. Avoid sentences that start with What, When, Where, Which, Who, Why, or How. Do not start with "Here's the thing," "I wanted to reach out," or "Hope you're well." Before returning, check directness, rhythm, trust, authenticity, and density; remove anything cuttable.`;
 
 export const generateDraft = internalAction({
-  args: { projectLaunchId: v.id("projectLaunches") },
+  args: {
+    projectLaunchId: v.id("projectLaunches"),
+    draftStartedAt: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
-    const draftStartedAt = await ctx.runMutation(
-      internal.draftData.claim,
-      args,
-    );
+    const draftStartedAt =
+      args.draftStartedAt ??
+      (await ctx.runMutation(internal.draftData.claim, {
+        projectLaunchId: args.projectLaunchId,
+      }));
     if (draftStartedAt === null) return;
-    const bundle = await ctx.runQuery(internal.draftData.bundle, args);
+    const bundle = await ctx.runQuery(internal.draftData.bundle, {
+      projectLaunchId: args.projectLaunchId,
+    });
     if (
       !bundle?.projectLaunch.scrapeMarkdown ||
       !bundle.projectLaunch.contactEmail ||

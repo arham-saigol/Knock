@@ -29,7 +29,7 @@ export const register = internalMutation({
         existing.status === "completed" ||
         existing.attemptCount >= 3 ||
         (existing.status === "processing" &&
-          Date.now() - existing.receivedAt < 10 * 60_000)
+          Date.now() - existing.receivedAt < monitorLeaseMs)
       )
         return null;
       const receivedAt = Date.now();

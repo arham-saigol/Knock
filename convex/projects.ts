@@ -66,14 +66,17 @@ export const get = query({
 });
 
 export const contextVersions = query({
-  args: { projectId: v.id("projects") },
+  args: {
+    projectId: v.id("projects"),
+    paginationOpts: paginationOptsValidator,
+  },
   handler: async (ctx, args) => {
     await requireProject(ctx, args.projectId);
     return ctx.db
       .query("projectContextVersions")
       .withIndex("by_project_created", (q) => q.eq("projectId", args.projectId))
       .order("desc")
-      .take(50);
+      .paginate(args.paginationOpts);
   },
 });
 

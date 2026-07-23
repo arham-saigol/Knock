@@ -1,65 +1,71 @@
 import { v } from "convex/values";
 
 import { internal } from "./_generated/api";
-import { internalMutation, internalQuery } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import {
+  internalMutation,
+  internalQuery,
+  type MutationCtx,
+} from "./_generated/server";
 
 const draftLeaseMs = 10 * 60_000;
 const draftRecoveryDelayMs = 30_000;
 const maxDraftRecoveries = 1;
 
+async function claimDraft(
+  ctx: MutationCtx,
+  projectLaunchId: Id<"projectLaunches">,
+) {
+  const projectLaunch = await ctx.db.get(projectLaunchId);
+  if (
+    !projectLaunch ||
+    projectLaunch.stage !== "drafting" ||
+    !projectLaunch.contactEmail
+  ) {
+    return null;
+  }
+  const existing = await ctx.db
+    .query("drafts")
+    .withIndex("by_project_launch", (q) =>
+      q
+        .eq("projectId", projectLaunch.projectId)
+        .eq("projectLaunchId", projectLaunch._id),
+    )
+    .unique();
+  if (existing) {
+    await ctx.db.patch(projectLaunch._id, {
+      status:
+        existing.status === "sent"
+          ? "sent"
+          : existing.status === "skipped"
+            ? "skipped"
+            : "ready",
+      stage: existing.status === "sent" ? "complete" : "review",
+      draftRecoveryCount: undefined,
+      updatedAt: Date.now(),
+    });
+    return null;
+  }
+  const now = Date.now();
+  if (
+    projectLaunch.draftStartedAt &&
+    now - projectLaunch.draftStartedAt < draftLeaseMs
+  )
+    return null;
+  await ctx.db.patch(projectLaunch._id, {
+    draftStartedAt: now,
+    updatedAt: now,
+  });
+  await ctx.scheduler.runAfter(draftLeaseMs, internal.draftData.recoverLease, {
+    projectLaunchId: projectLaunch._id,
+    draftStartedAt: now,
+  });
+  return now;
+}
+
 export const claim = internalMutation({
   args: { projectLaunchId: v.id("projectLaunches") },
-  handler: async (ctx, args) => {
-    const projectLaunch = await ctx.db.get(args.projectLaunchId);
-    if (
-      !projectLaunch ||
-      projectLaunch.stage !== "drafting" ||
-      !projectLaunch.contactEmail
-    ) {
-      return null;
-    }
-    const existing = await ctx.db
-      .query("drafts")
-      .withIndex("by_project_launch", (q) =>
-        q
-          .eq("projectId", projectLaunch.projectId)
-          .eq("projectLaunchId", projectLaunch._id),
-      )
-      .unique();
-    if (existing) {
-      await ctx.db.patch(projectLaunch._id, {
-        status:
-          existing.status === "sent"
-            ? "sent"
-            : existing.status === "skipped"
-              ? "skipped"
-              : "ready",
-        stage: existing.status === "sent" ? "complete" : "review",
-        draftRecoveryCount: undefined,
-        updatedAt: Date.now(),
-      });
-      return null;
-    }
-    const now = Date.now();
-    if (
-      projectLaunch.draftStartedAt &&
-      now - projectLaunch.draftStartedAt < 10 * 60_000
-    )
-      return null;
-    await ctx.db.patch(projectLaunch._id, {
-      draftStartedAt: now,
-      updatedAt: now,
-    });
-    await ctx.scheduler.runAfter(
-      draftLeaseMs,
-      internal.draftData.recoverLease,
-      {
-        projectLaunchId: projectLaunch._id,
-        draftStartedAt: now,
-      },
-    );
-    return now;
-  },
+  handler: (ctx, args) => claimDraft(ctx, args.projectLaunchId),
 });
 
 export const recoverLease = internalMutation({
@@ -191,23 +197,40 @@ export const fail = internalMutation({
 
 export const queueForProject = internalMutation({
   args: { projectId: v.id("projects") },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<number> => {
     const processing = await ctx.db
       .query("projectLaunches")
-      .withIndex("by_project_status", (q) =>
-        q.eq("projectId", args.projectId).eq("status", "processing"),
+      .withIndex("by_project_status_and_stage_and_draft_started_at", (q) =>
+        q
+          .eq("projectId", args.projectId)
+          .eq("status", "processing")
+          .eq("stage", "drafting")
+          .eq("draftStartedAt", undefined),
       )
-      .collect();
+      .take(20);
+    let scheduled = 0;
     for (const projectLaunch of processing) {
-      if (projectLaunch.stage !== "drafting" || !projectLaunch.contactEmail)
+      if (!projectLaunch.contactEmail) {
+        await ctx.db.patch(projectLaunch._id, {
+          status: "failed",
+          stage: "complete",
+          failure: "Draft contact details are incomplete",
+          updatedAt: Date.now(),
+        });
         continue;
+      }
+      const draftStartedAt = await claimDraft(ctx, projectLaunch._id);
+      if (draftStartedAt === null) continue;
       await ctx.scheduler.runAfter(0, internal.draftActions.generateDraft, {
         projectLaunchId: projectLaunch._id,
+        draftStartedAt,
       });
+      scheduled += 1;
     }
-    return processing.filter(
-      (projectLaunch) => projectLaunch.stage === "drafting",
-    ).length;
+    if (processing.length === 20) {
+      await ctx.scheduler.runAfter(0, internal.draftData.queueForProject, args);
+    }
+    return scheduled;
   },
 });
 

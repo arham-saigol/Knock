@@ -1,8 +1,65 @@
 import * as cheerio from "cheerio";
 import { XMLParser } from "fast-xml-parser";
+import { lookup } from "node:dns/promises";
+import { BlockList, isIP } from "node:net";
 
 import { productHuntDayBounds } from "./time";
 import { normalizeWebsiteUrl } from "./urls";
+
+const blockedAddresses = new BlockList();
+for (const [network, prefix] of [
+  ["0.0.0.0", 8],
+  ["10.0.0.0", 8],
+  ["100.64.0.0", 10],
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["172.16.0.0", 12],
+  ["192.0.0.0", 24],
+  ["192.0.2.0", 24],
+  ["192.168.0.0", 16],
+  ["198.18.0.0", 15],
+  ["198.51.100.0", 24],
+  ["203.0.113.0", 24],
+  ["224.0.0.0", 4],
+  ["240.0.0.0", 4],
+] as const) {
+  blockedAddresses.addSubnet(network, prefix, "ipv4");
+}
+for (const [network, prefix] of [
+  ["::", 128],
+  ["::1", 128],
+  ["::ffff:0:0", 96],
+  ["fc00::", 7],
+  ["fe80::", 10],
+  ["ff00::", 8],
+  ["2001:db8::", 32],
+] as const) {
+  blockedAddresses.addSubnet(network, prefix, "ipv6");
+}
+
+async function assertPublicHttpUrl(value: string) {
+  const url = new URL(value);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Redirect target must use HTTP or HTTPS");
+  }
+  const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (!hostname || hostname === "localhost" || hostname.endsWith(".local")) {
+    throw new Error("Redirect target must be public");
+  }
+  const literalFamily = isIP(hostname);
+  const addresses = literalFamily
+    ? [{ address: hostname, family: literalFamily }]
+    : await lookup(hostname, { all: true, verbatim: true });
+  if (
+    addresses.length === 0 ||
+    addresses.some(({ address, family }) =>
+      blockedAddresses.check(address, family === 6 ? "ipv6" : "ipv4"),
+    )
+  ) {
+    throw new Error("Redirect target resolved to a non-public address");
+  }
+  return url;
+}
 
 export type ProductHuntLaunch = {
   productHuntId?: string;
@@ -183,12 +240,26 @@ async function resolveProductUrl(
   redirectUrl = `https://www.producthunt.com/r/p/${productHuntId}?app_id=339`,
 ) {
   try {
-    const response = await fetch(redirectUrl, {
-      redirect: "follow",
-      headers: { "User-Agent": "Knock/1.0 (+private outreach research app)" },
-      signal: AbortSignal.timeout(20_000),
-    });
-    return normalizeOfficialWebsiteUrl(response.url);
+    let currentUrl = new URL(redirectUrl);
+    for (let redirectCount = 0; redirectCount <= 5; redirectCount += 1) {
+      currentUrl = await assertPublicHttpUrl(currentUrl.toString());
+      const response = await fetch(currentUrl, {
+        redirect: "manual",
+        headers: {
+          "User-Agent": "Knock/1.0 (+private outreach research app)",
+        },
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (response.status < 300 || response.status >= 400) {
+        await response.body?.cancel();
+        return normalizeOfficialWebsiteUrl(currentUrl.toString());
+      }
+      const location = response.headers.get("location");
+      await response.body?.cancel();
+      if (!location || redirectCount === 5) return undefined;
+      currentUrl = new URL(location, currentUrl);
+    }
+    return undefined;
   } catch {
     return undefined;
   }

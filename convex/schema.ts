@@ -114,6 +114,12 @@ export default defineSchema({
     .index("by_sync_stage", ["syncRunId", "stage"])
     .index("by_project_day", ["projectId", "launchDay"])
     .index("by_project_status", ["projectId", "status"])
+    .index("by_project_status_and_stage_and_draft_started_at", [
+      "projectId",
+      "status",
+      "stage",
+      "draftStartedAt",
+    ])
     .index("by_owner_day", ["ownerId", "launchDay"]),
 
   drafts: defineTable({
@@ -158,6 +164,7 @@ export default defineSchema({
     ),
     providerMessageId: v.optional(v.string()),
     failure: v.optional(v.string()),
+    smtpStartedAt: v.optional(v.number()),
     startedAt: v.number(),
     finishedAt: v.optional(v.number()),
   })

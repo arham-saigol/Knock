@@ -88,6 +88,7 @@ export async function POST(request: Request) {
       socketTimeout: 45_000,
     });
     const senderDomain = delivery.senderEmail.split("@")[1];
+    await client.mutation(api.deliveries.markSmtpStarted, { attemptId });
     smtpStarted = true;
     const info = await transporter.sendMail({
       from: { name: delivery.senderName, address: delivery.senderEmail },

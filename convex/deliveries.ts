@@ -80,7 +80,7 @@ export const reserve = mutation({
     const active = attempts.find((attempt) => attempt.status === "sending");
     if (active) {
       throw new ConvexError(
-        Date.now() - active.startedAt < 5 * 60_000
+        Date.now() - active.startedAt < DELIVERY_LEASE_MS
           ? "This draft is already being sent"
           : "The prior delivery outcome is unknown. Check the Sent folder before taking any action.",
       );
@@ -142,6 +142,22 @@ export const reserve = mutation({
       subject: draft.subject,
       body: draft.body,
     };
+  },
+});
+
+export const markSmtpStarted = mutation({
+  args: { attemptId: v.id("deliveryAttempts") },
+  handler: async (ctx, args) => {
+    const identity = await requireIdentity(ctx);
+    const attempt = await ctx.db.get(args.attemptId);
+    if (
+      !attempt ||
+      attempt.ownerId !== identity.subject ||
+      attempt.status !== "sending"
+    ) {
+      throw new ConvexError("Delivery attempt is no longer active");
+    }
+    await ctx.db.patch(attempt._id, { smtpStartedAt: Date.now() });
   },
 });
 
@@ -232,6 +248,19 @@ export const expireLease = internalMutation({
       Date.now() - attempt.startedAt < DELIVERY_LEASE_MS
     )
       return;
+    if (!attempt.smtpStartedAt) {
+      const now = Date.now();
+      await ctx.db.patch(attempt._id, {
+        status: "failed",
+        failure: "Delivery reservation expired before SMTP started",
+        finishedAt: now,
+      });
+      const draft = await ctx.db.get(attempt.draftId);
+      if (draft?.status === "sending") {
+        await ctx.db.patch(draft._id, { status: "ready", updatedAt: now });
+      }
+      return;
+    }
     await quarantineDelivery(
       ctx,
       attempt,
