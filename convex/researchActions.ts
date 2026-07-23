@@ -11,6 +11,7 @@ import {
   type EmailCandidate,
 } from "./lib/emailDiscovery";
 import { runContactAgent, scrapeWithFirecrawl } from "./lib/firecrawl";
+import { normalizeOfficialWebsiteUrl } from "./lib/productHunt";
 import { capText, errorMessage } from "./lib/strings";
 import { isPastDraftStart, pktDay } from "./lib/time";
 import { tinyFishFetch, tinyFishSearch } from "./lib/tinyfish";
@@ -219,11 +220,14 @@ export const processLaunch = internalAction({
     const bundle = await ctx.runQuery(internal.researchData.bundle, args);
     if (!bundle) return;
     try {
-      if (!bundle.launch.websiteUrl)
+      const launchWebsite = normalizeOfficialWebsiteUrl(
+        bundle.launch.websiteUrl,
+      );
+      if (!launchWebsite)
         throw new Error("Product Hunt did not provide a launch website");
-      const pages = await researchWebsite(bundle.launch.websiteUrl);
+      const pages = await researchWebsite(launchWebsite);
       const homepage = [...pages.values()][0];
-      const websiteUrl = homepage?.url ?? bundle.launch.websiteUrl;
+      const websiteUrl = homepage?.url ?? launchWebsite;
       let candidate = findBestCandidate(pages.values());
       let contactSource: "website" | "search" | undefined = candidate
         ? "website"
@@ -281,15 +285,17 @@ export const resolveContact = internalAction({
     let email: string | undefined;
     let sourceUrl: string | undefined;
     let evidence: string | undefined;
-    const claimed = await ctx.runMutation(
-      internal.researchData.claimFirecrawlAgent,
-      { day: pktDay() },
-    );
-    if (claimed && bundle.launch.websiteUrl) {
+    const launchWebsite = normalizeOfficialWebsiteUrl(bundle.launch.websiteUrl);
+    const claimed = launchWebsite
+      ? await ctx.runMutation(internal.researchData.claimFirecrawlAgent, {
+          day: pktDay(),
+        })
+      : false;
+    if (claimed && launchWebsite) {
       try {
         const result = await runContactAgent({
           name: bundle.launch.name,
-          websiteUrl: bundle.launch.websiteUrl,
+          websiteUrl: launchWebsite,
         });
         const candidateEmail =
           typeof result?.email === "string"
@@ -303,7 +309,7 @@ export const resolveContact = internalAction({
           candidateEmail &&
           candidateSource &&
           isAllowedContactEmail(candidateEmail) &&
-          isSameRootDomain(candidateSource, bundle.launch.websiteUrl)
+          isSameRootDomain(candidateSource, launchWebsite)
         ) {
           email = candidateEmail;
           sourceUrl = candidateSource;

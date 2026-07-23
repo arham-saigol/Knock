@@ -15,7 +15,7 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
 import { api } from "../../../../convex/_generated/api";
-import type { Doc } from "../../../../convex/_generated/dataModel";
+import type { Doc, Id } from "../../../../convex/_generated/dataModel";
 import { useCurrentProject } from "@/components/project-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,6 +43,16 @@ const contextFields = [
 ] as const;
 
 type SkipRetention = Doc<"projects">["skipRetention"];
+type ContextLists = Record<(typeof contextFields)[number][0], string>;
+
+function contextFormValues(context: Doc<"projects">["brandContext"]) {
+  return {
+    whatItDoes: context.whatItDoes,
+    lists: Object.fromEntries(
+      contextFields.map(([key]) => [key, context[key].join("\n")]),
+    ) as ContextLists,
+  };
+}
 
 export default function SettingsPage() {
   const { projects, currentProject, setCreateOpen } = useCurrentProject();
@@ -79,12 +89,13 @@ function SettingsForm({ project }: { project: Doc<"projects"> }) {
   const [domain, setDomain] = useState(project.domain);
   const [senderName, setSenderName] = useState(project.senderName);
   const [senderEmail, setSenderEmail] = useState(project.senderEmail);
-  const [whatItDoes, setWhatItDoes] = useState(project.brandContext.whatItDoes);
-  const [lists, setLists] = useState(
-    Object.fromEntries(
-      contextFields.map(([key]) => [key, project.brandContext[key].join("\n")]),
-    ) as Record<(typeof contextFields)[number][0], string>,
-  );
+  const initialContext = contextFormValues(project.brandContext);
+  const [whatItDoes, setWhatItDoes] = useState(initialContext.whatItDoes);
+  const [lists, setLists] = useState(initialContext.lists);
+  const [contextSource, setContextSource] = useState({
+    generation: project.contextGeneration,
+    ...initialContext,
+  });
   const [filterInstructions, setFilterInstructions] = useState(
     project.filterInstructions,
   );
@@ -102,6 +113,31 @@ function SettingsForm({ project }: { project: Doc<"projects"> }) {
   const [rebuilding, setRebuilding] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+
+  if (contextSource.generation !== project.contextGeneration) {
+    const nextContext = contextFormValues(project.brandContext);
+    const contextIsUnedited =
+      whatItDoes === contextSource.whatItDoes &&
+      contextFields.every(([key]) => lists[key] === contextSource.lists[key]);
+    setContextSource({
+      generation: project.contextGeneration,
+      ...nextContext,
+    });
+    if (contextIsUnedited) {
+      setWhatItDoes(nextContext.whatItDoes);
+      setLists(nextContext.lists);
+    }
+  }
+
+  function replaceContext(context: Doc<"projects">["brandContext"]) {
+    const nextContext = contextFormValues(context);
+    setWhatItDoes(nextContext.whatItDoes);
+    setLists(nextContext.lists);
+    setContextSource({
+      generation: project.contextGeneration,
+      ...nextContext,
+    });
+  }
 
   function brandContext() {
     return {
@@ -149,8 +185,13 @@ function SettingsForm({ project }: { project: Doc<"projects"> }) {
     setRebuilding(true);
     setError("");
     try {
-      await rebuildContext({ projectId: project._id });
-      setMessage("Brand context regenerated");
+      const generatedContext = await rebuildContext({
+        projectId: project._id,
+      });
+      if (generatedContext) {
+        replaceContext(generatedContext);
+        setMessage("Brand context regenerated");
+      }
     } catch (caught) {
       setError(
         caught instanceof Error
@@ -171,6 +212,23 @@ function SettingsForm({ project }: { project: Doc<"projects"> }) {
       return;
     await removeProject({ projectId: project._id });
     router.push("/today");
+  }
+
+  async function restore(
+    versionId: Id<"projectContextVersions">,
+    context: Doc<"projects">["brandContext"],
+  ) {
+    setError("");
+    setMessage("");
+    try {
+      await restoreContext({ projectId: project._id, versionId });
+      replaceContext(context);
+      setMessage("Brand context restored");
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Unable to restore context",
+      );
+    }
   }
 
   return (
@@ -252,10 +310,10 @@ function SettingsForm({ project }: { project: Doc<"projects"> }) {
             type="button"
             variant="outline"
             onClick={rebuild}
-            disabled={rebuilding}
+            disabled={rebuilding || project.contextStatus === "building"}
             className="border-foreground border-2"
           >
-            {rebuilding ? (
+            {rebuilding || project.contextStatus === "building" ? (
               <LoaderCircle className="animate-spin" />
             ) : (
               <RefreshCw />
@@ -339,8 +397,8 @@ function SettingsForm({ project }: { project: Doc<"projects"> }) {
             onCheckedChange={setMonitorEnabled}
           />
           <ToggleRow
-            label="11:45 PM late sync"
-            description="Fetch and process launches that the 2:45 PM sync did not see."
+            label="1:15 PM previous-day sync"
+            description="Fetch launches published after the prior day's main sync."
             checked={lateSyncEnabled}
             onCheckedChange={setLateSyncEnabled}
           />
@@ -405,10 +463,7 @@ function SettingsForm({ project }: { project: Doc<"projects"> }) {
                   variant="outline"
                   className="border-foreground mt-4 border-2"
                   onClick={() =>
-                    void restoreContext({
-                      projectId: project._id,
-                      versionId: version._id,
-                    })
+                    void restore(version._id, version.brandContext)
                   }
                 >
                   <RotateCcw /> Restore this version

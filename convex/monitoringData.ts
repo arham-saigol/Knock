@@ -10,6 +10,13 @@ export const register = internalMutation({
     projectId: v.id("projects"),
   },
   handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId);
+    if (
+      !project ||
+      !project.monitorEnabled ||
+      project.monitorId !== args.monitorId
+    )
+      return false;
     const existing = await ctx.db
       .query("monitorEvents")
       .withIndex("by_check", (q) => q.eq("checkId", args.checkId))

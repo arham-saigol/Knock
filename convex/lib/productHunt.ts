@@ -119,7 +119,7 @@ export async function fetchProductHuntApi(day: string) {
             post.website,
           );
           const websiteUrl =
-            officialWebsiteUrl ?? normalizeWebsiteUrl(post.website);
+            officialWebsiteUrl ?? normalizeOfficialWebsiteUrl(post.website);
           return {
             productHuntId: post.id,
             name: post.name.trim(),
@@ -188,13 +188,21 @@ async function resolveProductUrl(
       headers: { "User-Agent": "Knock/1.0 (+private outreach research app)" },
       signal: AbortSignal.timeout(20_000),
     });
-    const resolved = normalizeWebsiteUrl(response.url);
-    if (resolved && !new URL(resolved).hostname.endsWith("producthunt.com"))
-      return resolved;
+    return normalizeOfficialWebsiteUrl(response.url);
   } catch {
     return undefined;
   }
-  return undefined;
+}
+
+export function normalizeOfficialWebsiteUrl(url?: string) {
+  const normalized = url ? normalizeWebsiteUrl(url) : undefined;
+  if (!normalized) return undefined;
+  const hostname = new URL(normalized).hostname
+    .toLowerCase()
+    .replace(/\.$/, "");
+  if (hostname === "producthunt.com" || hostname.endsWith(".producthunt.com"))
+    return undefined;
+  return normalized;
 }
 
 export async function fetchProductHuntRss(day: string) {
@@ -240,20 +248,13 @@ export async function fetchProductHuntRss(day: string) {
       const fallbackUrl = firstLink(entry) ?? "https://www.producthunt.com";
       const productHuntUrl = normalizeWebsiteUrl(fallbackUrl) ?? fallbackUrl;
       const officialWebsiteUrl = id ? await resolveProductUrl(id) : undefined;
-      const websiteUrl =
-        officialWebsiteUrl ??
-        (id
-          ? normalizeWebsiteUrl(
-              `https://www.producthunt.com/r/p/${id}?app_id=339`,
-            )
-          : undefined);
       return {
         productHuntId: id,
         name: entry.title?.trim() || "Untitled launch",
         tagline: paragraphs[0] ?? "",
         description: paragraphs[0] ?? "",
         topics: [],
-        websiteUrl,
+        websiteUrl: officialWebsiteUrl,
         canonicalWebsiteUrl: officialWebsiteUrl,
         makers: entry.author?.name ? [{ name: entry.author.name }] : [],
         productHuntUrl,

@@ -17,6 +17,24 @@ import {
   skipRetentionValidator,
 } from "./validators";
 
+const cleanupPhaseValidator = v.union(
+  v.literal("projectLaunches"),
+  v.literal("deliveryAttempts"),
+  v.literal("drafts"),
+  v.literal("syncRuns"),
+  v.literal("projectContextVersions"),
+  v.literal("monitorEvents"),
+);
+const cleanupPhases = [
+  "projectLaunches",
+  "deliveryAttempts",
+  "drafts",
+  "syncRuns",
+  "projectContextVersions",
+  "monitorEvents",
+] as const;
+const CLEANUP_BATCH_SIZE = 8;
+
 export const list = query({
   args: {},
   handler: async (ctx) => {
@@ -249,43 +267,83 @@ export const remove = mutation({
         monitorId: project.monitorId,
       });
     }
-    const projectLaunches = await ctx.db
-      .query("projectLaunches")
-      .withIndex("by_project_day", (q) => q.eq("projectId", args.projectId))
-      .collect();
-    const drafts = await ctx.db
-      .query("drafts")
-      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-      .collect();
-    const deliveries = await ctx.db
-      .query("deliveryAttempts")
-      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-      .collect();
-    const runs = await ctx.db
-      .query("syncRuns")
-      .withIndex("by_project_started", (q) => q.eq("projectId", args.projectId))
-      .collect();
-    const versions = await ctx.db
-      .query("projectContextVersions")
-      .withIndex("by_project_created", (q) => q.eq("projectId", args.projectId))
-      .collect();
-    const monitorEvents = await ctx.db
-      .query("monitorEvents")
-      .withIndex("by_project_received", (q) =>
-        q.eq("projectId", args.projectId),
-      )
-      .collect();
-    for (const document of [
-      ...deliveries,
-      ...drafts,
-      ...projectLaunches,
-      ...runs,
-      ...versions,
-      ...monitorEvents,
-    ]) {
-      await ctx.db.delete(document._id);
-    }
     await ctx.db.delete(project._id);
+    await ctx.scheduler.runAfter(0, internal.projects.cleanupProject, {
+      projectId: project._id,
+      phase: "projectLaunches",
+    });
+  },
+});
+
+export const cleanupProject = internalMutation({
+  args: {
+    projectId: v.id("projects"),
+    phase: cleanupPhaseValidator,
+  },
+  handler: async (ctx, args): Promise<null> => {
+    let deleted = 0;
+    if (args.phase === "projectLaunches") {
+      const documents = await ctx.db
+        .query("projectLaunches")
+        .withIndex("by_project_day", (q) => q.eq("projectId", args.projectId))
+        .take(CLEANUP_BATCH_SIZE);
+      for (const document of documents) await ctx.db.delete(document._id);
+      deleted = documents.length;
+    } else if (args.phase === "deliveryAttempts") {
+      const documents = await ctx.db
+        .query("deliveryAttempts")
+        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+        .take(CLEANUP_BATCH_SIZE);
+      for (const document of documents) await ctx.db.delete(document._id);
+      deleted = documents.length;
+    } else if (args.phase === "drafts") {
+      const documents = await ctx.db
+        .query("drafts")
+        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+        .take(CLEANUP_BATCH_SIZE);
+      for (const document of documents) await ctx.db.delete(document._id);
+      deleted = documents.length;
+    } else if (args.phase === "syncRuns") {
+      const documents = await ctx.db
+        .query("syncRuns")
+        .withIndex("by_project_started", (q) =>
+          q.eq("projectId", args.projectId),
+        )
+        .take(CLEANUP_BATCH_SIZE);
+      for (const document of documents) await ctx.db.delete(document._id);
+      deleted = documents.length;
+    } else if (args.phase === "projectContextVersions") {
+      const documents = await ctx.db
+        .query("projectContextVersions")
+        .withIndex("by_project_created", (q) =>
+          q.eq("projectId", args.projectId),
+        )
+        .take(CLEANUP_BATCH_SIZE);
+      for (const document of documents) await ctx.db.delete(document._id);
+      deleted = documents.length;
+    } else {
+      const documents = await ctx.db
+        .query("monitorEvents")
+        .withIndex("by_project_received", (q) =>
+          q.eq("projectId", args.projectId),
+        )
+        .take(CLEANUP_BATCH_SIZE);
+      for (const document of documents) await ctx.db.delete(document._id);
+      deleted = documents.length;
+    }
+
+    if (deleted > 0) {
+      await ctx.scheduler.runAfter(0, internal.projects.cleanupProject, args);
+      return null;
+    }
+    const nextPhase = cleanupPhases[cleanupPhases.indexOf(args.phase) + 1];
+    if (nextPhase) {
+      await ctx.scheduler.runAfter(0, internal.projects.cleanupProject, {
+        projectId: args.projectId,
+        phase: nextPhase,
+      });
+    }
+    return null;
   },
 });
 

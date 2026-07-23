@@ -9,9 +9,13 @@ import {
   Plus,
   RefreshCw,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api } from "../../../../convex/_generated/api";
+import {
+  productHuntDay,
+  productHuntDayBounds,
+} from "../../../../convex/lib/time";
 import { ReviewQueue } from "@/components/review-queue";
 import { useCurrentProject } from "@/components/project-context";
 import { StatusBadge } from "@/components/status-badge";
@@ -21,9 +25,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 export default function TodayPage() {
   const { projects, currentProject, currentProjectId, setCreateOpen } =
     useCurrentProject();
+  const [launchDay, setLaunchDay] = useState(() => productHuntDay());
   const launches = useQuery(
     api.launches.today,
-    currentProjectId ? { projectId: currentProjectId } : "skip",
+    currentProjectId ? { projectId: currentProjectId, day: launchDay } : "skip",
   );
   const queue = useQuery(
     api.launches.reviewQueue,
@@ -34,6 +39,15 @@ export default function TodayPage() {
   const [syncing, setSyncing] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    const nextDay = productHuntDayBounds(launchDay).end.getTime() + 1;
+    const timeout = window.setTimeout(
+      () => setLaunchDay(productHuntDay()),
+      Math.max(0, nextDay - Date.now()),
+    );
+    return () => window.clearTimeout(timeout);
+  }, [launchDay]);
 
   async function sync() {
     if (!currentProjectId || syncing) return;

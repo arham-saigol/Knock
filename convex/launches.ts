@@ -5,7 +5,6 @@ import type { Doc } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import { requireIdentity, requireProject } from "./lib/auth";
 import { cleanSingleLine } from "./lib/strings";
-import { productHuntDay } from "./lib/time";
 
 async function joinLaunch(
   ctx: QueryCtx,
@@ -24,15 +23,13 @@ async function joinLaunch(
 }
 
 export const today = query({
-  args: { projectId: v.id("projects"), day: v.optional(v.string()) },
+  args: { projectId: v.id("projects"), day: v.string() },
   handler: async (ctx, args) => {
     await requireProject(ctx, args.projectId);
     const rows = await ctx.db
       .query("projectLaunches")
       .withIndex("by_project_day", (q) =>
-        q
-          .eq("projectId", args.projectId)
-          .eq("launchDay", args.day ?? productHuntDay()),
+        q.eq("projectId", args.projectId).eq("launchDay", args.day),
       )
       .order("desc")
       .collect();

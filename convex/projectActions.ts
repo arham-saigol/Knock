@@ -25,23 +25,32 @@ const brandContextSchema = z.object({
   prohibitedClaims: z.array(z.string().min(1).max(500)).max(20),
 });
 
+function monitorRetryDelay(attempt: number) {
+  return Math.min(60_000 * 2 ** Math.min(attempt, 6), 60 * 60_000);
+}
+
 export const rebuildContext = action({
   args: { projectId: v.id("projects") },
-  handler: async (ctx, args) => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<z.infer<typeof brandContextSchema> | null> => {
     const identity = await requireIdentity(ctx);
     assertProjectOwner(
       await ctx.runQuery(internal.projects.getInternal, args),
       identity.subject,
     );
-    const expectedGeneration = await ctx.runMutation(
+    const expectedGeneration: number | null = await ctx.runMutation(
       internal.projects.startContextGeneration,
       args,
     );
-    if (expectedGeneration === null) return;
-    await ctx.runAction(internal.projectActions.buildInitialContext, {
-      ...args,
-      expectedGeneration,
-    });
+    if (expectedGeneration === null) return null;
+    const brandContext: z.infer<typeof brandContextSchema> | null =
+      await ctx.runAction(internal.projectActions.buildInitialContext, {
+        ...args,
+        expectedGeneration,
+      });
+    return brandContext;
   },
 });
 
@@ -50,10 +59,13 @@ export const buildInitialContext = internalAction({
     projectId: v.id("projects"),
     expectedGeneration: v.number(),
   },
-  handler: async (ctx, args) => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<z.infer<typeof brandContextSchema> | null> => {
     const project = await ctx.runQuery(internal.projects.getInternal, args);
     if (!project || project.contextGeneration !== args.expectedGeneration)
-      return;
+      return null;
     try {
       const content = await crawlProjectWebsite(project.domain);
       const brandContext = await generateDeepSeekObject({
@@ -63,20 +75,25 @@ export const buildInitialContext = internalAction({
         prompt: `Build structured brand context for ${project.name} (${project.domain}). Keep each item concrete and editable.\n\n<untrusted_website_content>\n${content}\n</untrusted_website_content>`,
         maxOutputTokens: 5_000,
       });
-      await ctx.runMutation(internal.projects.saveGeneratedContext, {
-        projectId: project._id,
-        expectedGeneration: args.expectedGeneration,
-        brandContext,
-        source: "initial_crawl",
-        changeNote:
-          "Generated from a focused Firecrawl Crawl of the project website.",
-      });
+      const saved = await ctx.runMutation(
+        internal.projects.saveGeneratedContext,
+        {
+          projectId: project._id,
+          expectedGeneration: args.expectedGeneration,
+          brandContext,
+          source: "initial_crawl",
+          changeNote:
+            "Generated from a focused Firecrawl Crawl of the project website.",
+        },
+      );
+      return saved ? brandContext : null;
     } catch (error) {
       await ctx.runMutation(internal.projects.setContextFailure, {
         projectId: project._id,
         expectedGeneration: args.expectedGeneration,
         error: errorMessage(error),
       });
+      return null;
     }
   },
 });
@@ -86,6 +103,7 @@ export const configureMonitor = internalAction({
     projectId: v.id("projects"),
     previousMonitorId: v.optional(v.string()),
     expectedGeneration: v.number(),
+    retryAttempt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const project = await ctx.runQuery(internal.projects.getInternal, {
@@ -93,9 +111,27 @@ export const configureMonitor = internalAction({
     });
     if (!project || project.monitorGeneration !== args.expectedGeneration)
       return;
-    try {
-      if (args.previousMonitorId)
+    if (args.previousMonitorId) {
+      try {
         await deleteProjectMonitor(args.previousMonitorId);
+      } catch (error) {
+        await ctx.runMutation(internal.projects.setMonitorResult, {
+          projectId: project._id,
+          expectedGeneration: args.expectedGeneration,
+          monitorId: args.previousMonitorId,
+          error: errorMessage(error),
+        });
+        const retryAttempt = args.retryAttempt ?? 0;
+        await ctx.scheduler.runAfter(
+          monitorRetryDelay(retryAttempt),
+          internal.projectActions.configureMonitor,
+          { ...args, retryAttempt: retryAttempt + 1 },
+        );
+        return;
+      }
+    }
+    let createdMonitorId: string | undefined;
+    try {
       if (!project.monitorEnabled) {
         await ctx.runMutation(internal.projects.setMonitorResult, {
           projectId: project._id,
@@ -104,7 +140,7 @@ export const configureMonitor = internalAction({
         });
         return;
       }
-      const monitorId = await createProjectMonitor({
+      createdMonitorId = await createProjectMonitor({
         projectId: project._id,
         projectName: project.name,
         url: project.domain,
@@ -112,10 +148,19 @@ export const configureMonitor = internalAction({
       const saved = await ctx.runMutation(internal.projects.setMonitorResult, {
         projectId: project._id,
         expectedGeneration: args.expectedGeneration,
-        monitorId,
+        monitorId: createdMonitorId,
       });
-      if (!saved) await deleteProjectMonitor(monitorId);
+      if (!saved) {
+        await ctx.scheduler.runAfter(0, internal.projectActions.deleteMonitor, {
+          monitorId: createdMonitorId,
+        });
+      }
     } catch (error) {
+      if (createdMonitorId) {
+        await ctx.scheduler.runAfter(0, internal.projectActions.deleteMonitor, {
+          monitorId: createdMonitorId,
+        });
+      }
       await ctx.runMutation(internal.projects.setMonitorResult, {
         projectId: project._id,
         expectedGeneration: args.expectedGeneration,
@@ -127,13 +172,18 @@ export const configureMonitor = internalAction({
 });
 
 export const deleteMonitor = internalAction({
-  args: { monitorId: v.optional(v.string()) },
-  handler: async (_ctx, args) => {
-    if (!args.monitorId) return;
+  args: { monitorId: v.string(), retryAttempt: v.optional(v.number()) },
+  handler: async (ctx, args) => {
     try {
       await deleteProjectMonitor(args.monitorId);
     } catch (error) {
       console.error("Unable to delete Firecrawl monitor", error);
+      const retryAttempt = args.retryAttempt ?? 0;
+      await ctx.scheduler.runAfter(
+        monitorRetryDelay(retryAttempt),
+        internal.projectActions.deleteMonitor,
+        { monitorId: args.monitorId, retryAttempt: retryAttempt + 1 },
+      );
     }
   },
 });
