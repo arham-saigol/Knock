@@ -113,20 +113,23 @@ function SettingsForm({ project }: { project: Doc<"projects"> }) {
   const [rebuilding, setRebuilding] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const contextIsUnedited =
+    whatItDoes === contextSource.whatItDoes &&
+    contextFields.every(([key]) => lists[key] === contextSource.lists[key]);
+  const contextHasConflict =
+    contextSource.generation < project.contextGeneration && !contextIsUnedited;
 
-  if (contextSource.generation !== project.contextGeneration) {
+  if (
+    contextSource.generation < project.contextGeneration &&
+    contextIsUnedited
+  ) {
     const nextContext = contextFormValues(project.brandContext);
-    const contextIsUnedited =
-      whatItDoes === contextSource.whatItDoes &&
-      contextFields.every(([key]) => lists[key] === contextSource.lists[key]);
     setContextSource({
       generation: project.contextGeneration,
       ...nextContext,
     });
-    if (contextIsUnedited) {
-      setWhatItDoes(nextContext.whatItDoes);
-      setLists(nextContext.lists);
-    }
+    setWhatItDoes(nextContext.whatItDoes);
+    setLists(nextContext.lists);
   }
 
   function replaceContext(context: Doc<"projects">["brandContext"]) {
@@ -158,18 +161,24 @@ function SettingsForm({ project }: { project: Doc<"projects"> }) {
     setError("");
     setMessage("");
     try {
-      await updateProject({
+      const nextBrandContext = brandContext();
+      const savedGeneration = await updateProject({
         projectId: project._id,
+        expectedContextGeneration: contextSource.generation,
         name,
         domain,
         senderName,
         senderEmail,
-        brandContext: brandContext(),
+        brandContext: nextBrandContext,
         filterInstructions,
         draftInstructions,
         monitorEnabled,
         lateSyncEnabled,
         skipRetention,
+      });
+      setContextSource({
+        generation: savedGeneration,
+        ...contextFormValues(nextBrandContext),
       });
       setMessage("Settings saved");
     } catch (caught) {
@@ -335,6 +344,22 @@ function SettingsForm({ project }: { project: Doc<"projects"> }) {
             <p className="text-sm">
               Firecrawl and DeepSeek are rebuilding this context.
             </p>
+          </div>
+        ) : null}
+        {contextHasConflict ? (
+          <div className="border-destructive text-destructive mb-4 flex flex-col gap-3 border-2 p-4 sm:flex-row sm:items-center">
+            <p className="text-sm">
+              Brand context changed in another session. Load the latest version
+              before saving.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => replaceContext(project.brandContext)}
+              className="border-destructive ml-auto border-2"
+            >
+              Load latest
+            </Button>
           </div>
         ) : null}
         <div className="grid gap-4">

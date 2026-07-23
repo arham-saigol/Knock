@@ -25,7 +25,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 export default function TodayPage() {
   const { projects, currentProject, currentProjectId, setCreateOpen } =
     useCurrentProject();
-  const [launchDay, setLaunchDay] = useState(() => productHuntDay());
+  const [today, setToday] = useState(() => productHuntDay());
+  const [showPreviousDay, setShowPreviousDay] = useState(false);
+  const launchDay = showPreviousDay
+    ? productHuntDay(productHuntDayBounds(today).start.getTime() - 1)
+    : today;
   const launches = useQuery(
     api.launches.today,
     currentProjectId ? { projectId: currentProjectId, day: launchDay } : "skip",
@@ -41,13 +45,13 @@ export default function TodayPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const nextDay = productHuntDayBounds(launchDay).end.getTime() + 1;
+    const nextDay = productHuntDayBounds(today).end.getTime() + 1;
     const timeout = window.setTimeout(
-      () => setLaunchDay(productHuntDay()),
+      () => setToday(productHuntDay()),
       Math.max(0, nextDay - Date.now()),
     );
     return () => window.clearTimeout(timeout);
-  }, [launchDay]);
+  }, [today]);
 
   async function sync() {
     if (!currentProjectId || syncing) return;
@@ -95,7 +99,7 @@ export default function TodayPage() {
       <header className="border-foreground flex flex-col gap-5 border-b-2 pb-6 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-muted-foreground font-mono text-[10px] font-semibold tracking-[0.2em] uppercase">
-            Product Hunt / Today
+            Product Hunt / {showPreviousDay ? "Previous day" : "Today"}
           </p>
           <h1 className="mt-1 text-4xl font-bold tracking-[-0.055em] md:text-5xl">
             Daily launches
@@ -161,7 +165,38 @@ export default function TodayPage() {
         </p>
       ) : null}
 
-      <section className="mt-6" aria-label="Today's launches">
+      <div className="mt-6 flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant={showPreviousDay ? "outline" : "default"}
+          onClick={() => setShowPreviousDay(false)}
+          aria-pressed={!showPreviousDay}
+          className="border-foreground border-2"
+        >
+          Today
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant={showPreviousDay ? "default" : "outline"}
+          onClick={() => setShowPreviousDay(true)}
+          aria-pressed={showPreviousDay}
+          className="border-foreground border-2"
+        >
+          Previous day
+        </Button>
+        <span className="text-muted-foreground ml-auto font-mono text-[10px]">
+          {launchDay}
+        </span>
+      </div>
+
+      <section
+        className="mt-3"
+        aria-label={
+          showPreviousDay ? "Previous day's launches" : "Today's launches"
+        }
+      >
         {launches === undefined ? (
           <LaunchListLoading />
         ) : launches.length ? (
@@ -237,16 +272,20 @@ export default function TodayPage() {
           <div className="border-foreground border-2 border-dashed p-10 text-center">
             <p className="text-lg font-bold">No retained launches yet</p>
             <p className="text-muted-foreground mt-1 text-sm">
-              Run a sync or wait for the 2:45 PM PKT schedule.
+              {showPreviousDay
+                ? "The previous-day catch-up has no retained launches."
+                : "Run a sync or wait for the 2:45 PM PKT schedule."}
             </p>
-            <Button
-              variant="outline"
-              onClick={sync}
-              disabled={syncing}
-              className="border-foreground mt-5 border-2"
-            >
-              <RefreshCw /> Sync now
-            </Button>
+            {!showPreviousDay ? (
+              <Button
+                variant="outline"
+                onClick={sync}
+                disabled={syncing}
+                className="border-foreground mt-5 border-2"
+              >
+                <RefreshCw /> Sync now
+              </Button>
+            ) : null}
           </div>
         )}
       </section>

@@ -125,6 +125,7 @@ export const create = mutation({
 export const update = mutation({
   args: {
     projectId: v.id("projects"),
+    expectedContextGeneration: v.number(),
     name: v.string(),
     domain: v.string(),
     senderName: v.string(),
@@ -162,6 +163,14 @@ export const update = mutation({
     const contextChanged =
       JSON.stringify(project.brandContext) !==
       JSON.stringify(args.brandContext);
+    if (
+      contextChanged &&
+      project.contextGeneration !== args.expectedContextGeneration
+    ) {
+      throw new ConvexError(
+        "Brand context changed in another session. Load the latest version before saving.",
+      );
+    }
     const domainChanged = canonicalDomain !== project.canonicalDomain;
     const monitorChanged =
       args.monitorEnabled !== project.monitorEnabled ||
@@ -229,6 +238,7 @@ export const update = mutation({
         },
       );
     }
+    return contextGeneration;
   },
 });
 
