@@ -40,14 +40,23 @@ const contextRecoveryDelayMs = 30_000;
 const maxContextRecoveries = 1;
 
 export const list = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
     const identity = await requireIdentity(ctx);
     return ctx.db
       .query("projects")
       .withIndex("by_owner", (q) => q.eq("ownerId", identity.subject))
       .order("desc")
-      .collect();
+      .paginate(args.paginationOpts);
+  },
+});
+
+export const selected = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const identity = await requireIdentity(ctx);
+    const project = await ctx.db.get(args.projectId);
+    return project?.ownerId === identity.subject ? project : null;
   },
 });
 

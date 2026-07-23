@@ -4,6 +4,7 @@ import { UserButton } from "@clerk/nextjs";
 import {
   ChevronDown,
   FolderCog,
+  LoaderCircle,
   Menu,
   Plus,
   Settings,
@@ -33,8 +34,15 @@ const navigation = [
 
 function SidebarContents({ close }: { close?: () => void }) {
   const pathname = usePathname();
-  const { projects, currentProject, selectProject, setCreateOpen } =
-    useCurrentProject();
+  const {
+    projects,
+    currentProject,
+    selectProject,
+    hasMoreProjects,
+    loadingMoreProjects,
+    loadMoreProjects,
+    setCreateOpen,
+  } = useCurrentProject();
 
   return (
     <div className="bg-sidebar flex h-full flex-col">
@@ -79,6 +87,19 @@ function SidebarContents({ close }: { close?: () => void }) {
                 <span className="truncate">{project.name}</span>
               </DropdownMenuItem>
             ))}
+            {hasMoreProjects ? (
+              <DropdownMenuItem
+                disabled={loadingMoreProjects}
+                onClick={loadMoreProjects}
+              >
+                {loadingMoreProjects ? (
+                  <LoaderCircle className="animate-spin" />
+                ) : (
+                  <Plus />
+                )}
+                Load more projects
+              </DropdownMenuItem>
+            ) : null}
             <DropdownMenuSeparator className="bg-foreground" />
             <DropdownMenuItem onClick={() => setCreateOpen(true)}>
               <Plus /> Add project

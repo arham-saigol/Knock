@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "convex/react";
+import { usePaginatedQuery, useQuery } from "convex/react";
 import { createContext, use, useEffect, useState, type ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
@@ -11,6 +11,9 @@ type ProjectContextValue = {
   currentProject: Doc<"projects"> | undefined;
   currentProjectId: Id<"projects"> | undefined;
   selectProject: (projectId: Id<"projects">) => void;
+  hasMoreProjects: boolean;
+  loadingMoreProjects: boolean;
+  loadMoreProjects: () => void;
   createOpen: boolean;
   setCreateOpen: (open: boolean) => void;
 };
@@ -18,7 +21,6 @@ type ProjectContextValue = {
 const ProjectContext = createContext<ProjectContextValue | null>(null);
 
 export function ProjectProvider({ children }: { children: ReactNode }) {
-  const projects = useQuery(api.projects.list);
   const [selectedId, setSelectedId] = useState<Id<"projects"> | undefined>(
     () => {
       if (typeof window === "undefined") return undefined;
@@ -29,6 +31,15 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       );
     },
   );
+  const {
+    results: projectPage,
+    status: projectPaginationStatus,
+    loadMore,
+  } = usePaginatedQuery(api.projects.list, {}, { initialNumItems: 20 });
+  const selectedProject = useQuery(
+    api.projects.selected,
+    selectedId ? { projectId: selectedId } : "skip",
+  );
   const [createOpen, setCreateOpen] = useState(false);
 
   function selectProject(projectId: Id<"projects">) {
@@ -36,8 +47,24 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     window.localStorage.setItem("knock.currentProject", projectId);
   }
 
-  const currentProject =
-    projects?.find((project) => project._id === selectedId) ?? projects?.[0];
+  const pageSelected = projectPage.find(
+    (project) => project._id === selectedId,
+  );
+  const resolvedSelected = pageSelected ?? selectedProject;
+  const projects =
+    projectPaginationStatus === "LoadingFirstPage"
+      ? undefined
+      : resolvedSelected && !pageSelected
+        ? [resolvedSelected, ...projectPage]
+        : projectPage;
+  const currentProject = selectedId
+    ? resolvedSelected === undefined
+      ? undefined
+      : (resolvedSelected ?? projects?.[0])
+    : projects?.[0];
+  const hasMoreProjects =
+    projectPaginationStatus === "CanLoadMore" ||
+    projectPaginationStatus === "LoadingMore";
 
   useEffect(() => {
     if (currentProject) {
@@ -52,6 +79,11 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         currentProject,
         currentProjectId: currentProject?._id,
         selectProject,
+        hasMoreProjects,
+        loadingMoreProjects: projectPaginationStatus === "LoadingMore",
+        loadMoreProjects: () => {
+          if (projectPaginationStatus === "CanLoadMore") loadMore(20);
+        },
         createOpen,
         setCreateOpen,
       }}
