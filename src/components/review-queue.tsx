@@ -104,23 +104,22 @@ export function ReviewQueue({
         subject: editedSubject,
         body: editedBody,
       })
-        .then((nextVersion) => {
+        .then((savedDraft) => {
           setEdits((previous) => {
             const edit = previous[currentDraftId];
             return edit
               ? {
                   ...previous,
-                  [currentDraftId]: { ...edit, version: nextVersion },
+                  [currentDraftId]:
+                    editRevision.current === revision
+                      ? savedDraft
+                      : { ...edit, version: savedDraft.version },
                 }
               : previous;
           });
           setAcknowledged((previous) => ({
             ...previous,
-            [currentDraftId]: {
-              subject: editedSubject,
-              body: editedBody,
-              version: nextVersion,
-            },
+            [currentDraftId]: savedDraft,
           }));
           setSaveState("saved");
         })

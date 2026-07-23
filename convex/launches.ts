@@ -1,3 +1,4 @@
+import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 
 import { internal } from "./_generated/api";
@@ -23,7 +24,11 @@ async function joinLaunch(
 }
 
 export const today = query({
-  args: { projectId: v.id("projects"), day: v.string() },
+  args: {
+    projectId: v.id("projects"),
+    day: v.string(),
+    paginationOpts: paginationOptsValidator,
+  },
   handler: async (ctx, args) => {
     await requireProject(ctx, args.projectId);
     const result = await ctx.db
@@ -33,15 +38,11 @@ export const today = query({
       )
       .order("desc")
       .filter((q) => q.neq(q.field("status"), "filtered"))
-      .paginate({
-        numItems: 100,
-        cursor: null,
-        maximumRowsRead: 500,
-      });
+      .paginate(args.paginationOpts);
     const joined = await Promise.all(
       result.page.map((row) => joinLaunch(ctx, row)),
     );
-    return joined.filter((row) => row !== null);
+    return { ...result, page: joined.filter((row) => row !== null) };
   },
 });
 
@@ -101,7 +102,7 @@ export const updateDraft = mutation({
       version: draft.version + 1,
       updatedAt: Date.now(),
     });
-    return draft.version + 1;
+    return { version: draft.version + 1, subject, body };
   },
 });
 

@@ -17,14 +17,22 @@ function required(name: string) {
   return value;
 }
 
-function isExplicitSmtpFailure(error: unknown) {
-  if (!error || typeof error !== "object" || !("responseCode" in error))
-    return false;
-  const responseCode = error.responseCode;
-  return (
+function mayHaveAcceptedMessage(error: unknown) {
+  if (!error || typeof error !== "object") return true;
+  const responseCode = "responseCode" in error ? error.responseCode : undefined;
+  if (
     typeof responseCode === "number" &&
     responseCode >= 400 &&
     responseCode < 600
+  )
+    return false;
+  const command = "command" in error ? error.command : undefined;
+  if (typeof command === "string") {
+    return command.trim().toUpperCase() === "DATA";
+  }
+  const code = "code" in error ? error.code : undefined;
+  return !["EAUTH", "ECONNECTION", "EDNS", "ESOCKET", "ETLS"].includes(
+    typeof code === "string" ? code.toUpperCase() : "",
   );
 }
 
@@ -101,7 +109,7 @@ export async function POST(request: Request) {
       error instanceof Error ? error.message : "Unable to send email";
     if (attemptId && client) {
       const mutation =
-        smtpStarted && !isExplicitSmtpFailure(error)
+        smtpStarted && mayHaveAcceptedMessage(error)
           ? client.mutation(api.deliveries.markUnknown, {
               attemptId,
               error: message,

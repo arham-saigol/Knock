@@ -1,6 +1,11 @@
 "use client";
 
-import { useAction, useMutation, useQuery } from "convex/react";
+import {
+  useAction,
+  useMutation,
+  usePaginatedQuery,
+  useQuery,
+} from "convex/react";
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -30,9 +35,14 @@ export default function TodayPage() {
   const launchDay = showPreviousDay
     ? productHuntDay(productHuntDayBounds(today).start.getTime() - 1)
     : today;
-  const launches = useQuery(
+  const {
+    results: launches,
+    status: launchPaginationStatus,
+    loadMore: loadMoreLaunches,
+  } = usePaginatedQuery(
     api.launches.today,
     currentProjectId ? { projectId: currentProjectId, day: launchDay } : "skip",
+    { initialNumItems: 50 },
   );
   const queue = useQuery(
     api.launches.reviewQueue,
@@ -197,77 +207,94 @@ export default function TodayPage() {
           showPreviousDay ? "Previous day's launches" : "Today's launches"
         }
       >
-        {launches === undefined ? (
+        {launchPaginationStatus === "LoadingFirstPage" ? (
           <LaunchListLoading />
         ) : launches.length ? (
-          <div className="border-foreground border-t-2">
-            {launches.map(({ projectLaunch, launch, draft }) => (
-              <article
-                key={projectLaunch._id}
-                className="border-foreground bg-card hover:bg-muted grid grid-cols-[2.5rem_minmax(0,1fr)_auto_2rem] items-center gap-3 border-b-2 px-3 py-3.5 transition-colors md:grid-cols-[3rem_minmax(0,1fr)_9rem_2rem] md:px-4"
-              >
-                <div className="border-foreground bg-background grid size-9 place-items-center border-2 text-sm font-bold uppercase md:size-10">
-                  {launch.name.slice(0, 1)}
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h2 className="truncate text-sm font-bold md:text-base">
-                      {launch.name}
-                    </h2>
-                    {projectLaunch.contactEmail ? (
-                      <span className="text-muted-foreground hidden truncate font-mono text-[10px] xl:inline">
-                        {projectLaunch.contactEmail}
-                      </span>
+          <>
+            <div className="border-foreground border-t-2">
+              {launches.map(({ projectLaunch, launch, draft }) => (
+                <article
+                  key={projectLaunch._id}
+                  className="border-foreground bg-card hover:bg-muted grid grid-cols-[2.5rem_minmax(0,1fr)_auto_2rem] items-center gap-3 border-b-2 px-3 py-3.5 transition-colors md:grid-cols-[3rem_minmax(0,1fr)_9rem_2rem] md:px-4"
+                >
+                  <div className="border-foreground bg-background grid size-9 place-items-center border-2 text-sm font-bold uppercase md:size-10">
+                    {launch.name.slice(0, 1)}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h2 className="truncate text-sm font-bold md:text-base">
+                        {launch.name}
+                      </h2>
+                      {projectLaunch.contactEmail ? (
+                        <span className="text-muted-foreground hidden truncate font-mono text-[10px] xl:inline">
+                          {projectLaunch.contactEmail}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="text-muted-foreground mt-0.5 truncate text-xs md:text-sm">
+                      {launch.tagline}
+                    </p>
+                    {projectLaunch.status === "failed" &&
+                    projectLaunch.failure ? (
+                      <p className="text-destructive mt-1 truncate text-xs">
+                        {projectLaunch.failure}
+                      </p>
+                    ) : draft?.status === "skipped" ? (
+                      <p className="text-muted-foreground mt-1 truncate text-xs">
+                        Skipped draft retained
+                      </p>
                     ) : null}
                   </div>
-                  <p className="text-muted-foreground mt-0.5 truncate text-xs md:text-sm">
-                    {launch.tagline}
-                  </p>
-                  {projectLaunch.status === "failed" &&
-                  projectLaunch.failure ? (
-                    <p className="text-destructive mt-1 truncate text-xs">
-                      {projectLaunch.failure}
-                    </p>
-                  ) : draft?.status === "skipped" ? (
-                    <p className="text-muted-foreground mt-1 truncate text-xs">
-                      Skipped draft retained
-                    </p>
-                  ) : null}
-                </div>
-                <StatusBadge status={projectLaunch.status} />
-                {projectLaunch.status === "failed" ? (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void retryLaunch({
-                        projectLaunchId: projectLaunch._id,
-                      }).catch((caught) =>
-                        setError(
-                          caught instanceof Error
-                            ? caught.message
-                            : "Retry failed",
-                        ),
-                      )
-                    }
-                    aria-label={`Retry ${launch.name}`}
-                    className="hover:border-foreground hover:bg-accent grid size-8 place-items-center border border-transparent"
-                  >
-                    <RefreshCw className="size-4" />
-                  </button>
-                ) : (
-                  <a
-                    href={launch.productHuntUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    aria-label={`Open ${launch.name} on Product Hunt`}
-                    className="hover:border-foreground hover:bg-accent grid size-8 place-items-center border border-transparent"
-                  >
-                    <ArrowUpRight className="size-4" />
-                  </a>
-                )}
-              </article>
-            ))}
-          </div>
+                  <StatusBadge status={projectLaunch.status} />
+                  {projectLaunch.status === "failed" ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void retryLaunch({
+                          projectLaunchId: projectLaunch._id,
+                        }).catch((caught) =>
+                          setError(
+                            caught instanceof Error
+                              ? caught.message
+                              : "Retry failed",
+                          ),
+                        )
+                      }
+                      aria-label={`Retry ${launch.name}`}
+                      className="hover:border-foreground hover:bg-accent grid size-8 place-items-center border border-transparent"
+                    >
+                      <RefreshCw className="size-4" />
+                    </button>
+                  ) : (
+                    <a
+                      href={launch.productHuntUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label={`Open ${launch.name} on Product Hunt`}
+                      className="hover:border-foreground hover:bg-accent grid size-8 place-items-center border border-transparent"
+                    >
+                      <ArrowUpRight className="size-4" />
+                    </a>
+                  )}
+                </article>
+              ))}
+            </div>
+            {launchPaginationStatus === "CanLoadMore" ||
+            launchPaginationStatus === "LoadingMore" ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => loadMoreLaunches(50)}
+                disabled={launchPaginationStatus === "LoadingMore"}
+                className="border-foreground mt-4 border-2"
+              >
+                {launchPaginationStatus === "LoadingMore" ? (
+                  <LoaderCircle className="animate-spin" />
+                ) : null}
+                Load more
+              </Button>
+            ) : null}
+          </>
         ) : (
           <div className="border-foreground border-2 border-dashed p-10 text-center">
             <p className="text-lg font-bold">No retained launches yet</p>
