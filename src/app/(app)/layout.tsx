@@ -1,3 +1,4 @@
+import { auth } from "@clerk/nextjs/server";
 import type { ReactNode } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
@@ -5,7 +6,9 @@ import { AuthenticatedShell } from "@/components/authenticated-shell";
 import { CreateProjectDialog } from "@/components/create-project-dialog";
 import { ProjectProvider } from "@/components/project-context";
 
-export default function AppLayout({ children }: { children: ReactNode }) {
+export default async function AppLayout({ children }: { children: ReactNode }) {
+  await auth.protect();
+
   return (
     <AuthenticatedShell>
       <ProjectProvider>

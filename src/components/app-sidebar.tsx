@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -77,29 +78,31 @@ function SidebarContents({ close }: { close?: () => void }) {
             <ChevronDown className="size-4" />
           </DropdownMenuTrigger>
           <DropdownMenuContent className="border-foreground border-2 shadow-[3px_3px_0_var(--foreground)] ring-0">
-            <DropdownMenuLabel>Projects</DropdownMenuLabel>
-            {projects?.map((project) => (
-              <DropdownMenuItem
-                key={project._id}
-                onClick={() => selectProject(project._id)}
-              >
-                <span className="border-foreground bg-accent size-2 border" />
-                <span className="truncate">{project.name}</span>
-              </DropdownMenuItem>
-            ))}
-            {hasMoreProjects ? (
-              <DropdownMenuItem
-                disabled={loadingMoreProjects}
-                onClick={loadMoreProjects}
-              >
-                {loadingMoreProjects ? (
-                  <LoaderCircle className="animate-spin" />
-                ) : (
-                  <Plus />
-                )}
-                Load more projects
-              </DropdownMenuItem>
-            ) : null}
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>Projects</DropdownMenuLabel>
+              {projects?.map((project) => (
+                <DropdownMenuItem
+                  key={project._id}
+                  onClick={() => selectProject(project._id)}
+                >
+                  <span className="border-foreground bg-accent size-2 border" />
+                  <span className="truncate">{project.name}</span>
+                </DropdownMenuItem>
+              ))}
+              {hasMoreProjects ? (
+                <DropdownMenuItem
+                  disabled={loadingMoreProjects}
+                  onClick={loadMoreProjects}
+                >
+                  {loadingMoreProjects ? (
+                    <LoaderCircle className="animate-spin" />
+                  ) : (
+                    <Plus />
+                  )}
+                  Load more projects
+                </DropdownMenuItem>
+              ) : null}
+            </DropdownMenuGroup>
             <DropdownMenuSeparator className="bg-foreground" />
             <DropdownMenuItem onClick={() => setCreateOpen(true)}>
               <Plus /> Add project
