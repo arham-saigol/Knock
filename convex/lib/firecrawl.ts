@@ -115,10 +115,12 @@ export async function crawlProjectWebsite(url: string) {
 export async function createProjectMonitor({
   projectId,
   projectName,
+  monitorGeneration,
   url,
 }: {
   projectId: string;
   projectName: string;
+  monitorGeneration: number;
   url: string;
 }) {
   const siteUrl = process.env.CONVEX_SITE_URL;
@@ -135,7 +137,10 @@ export async function createProjectMonitor({
       webhook: {
         url: `${siteUrl.replace(/\/$/, "")}/firecrawl-monitor`,
         events: ["monitor.check.completed"],
-        metadata: { projectId },
+        metadata: {
+          projectId,
+          monitorGeneration: String(monitorGeneration),
+        },
       },
       targets: [
         {
@@ -164,6 +169,39 @@ export async function createProjectMonitor({
   const id = typeof data?.id === "string" ? data.id : undefined;
   if (!id) throw new Error("Firecrawl did not return a monitor ID");
   return id;
+}
+
+export async function findProjectMonitorIds({
+  projectId,
+  monitorGeneration,
+}: {
+  projectId: string;
+  monitorGeneration: number;
+}) {
+  const ids: string[] = [];
+  const limit = 100;
+  for (let offset = 0; offset < 500; offset += limit) {
+    const result = await firecrawlFetch(
+      `/monitor?limit=${limit}&offset=${offset}`,
+    );
+    const monitors = Array.isArray(result.data)
+      ? (result.data as Array<Record<string, unknown>>)
+      : [];
+    for (const monitor of monitors) {
+      const webhook = monitor.webhook as Record<string, unknown> | undefined;
+      const metadata = webhook?.metadata as Record<string, unknown> | undefined;
+      if (
+        typeof monitor.id === "string" &&
+        monitor.status !== "deleted" &&
+        metadata?.projectId === projectId &&
+        metadata.monitorGeneration === String(monitorGeneration)
+      ) {
+        ids.push(monitor.id);
+      }
+    }
+    if (monitors.length < limit) break;
+  }
+  return ids;
 }
 
 export async function deleteProjectMonitor(monitorId: string) {

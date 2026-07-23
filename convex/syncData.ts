@@ -7,6 +7,7 @@ import { ownerTokenIdentifierFor } from "./lib/auth";
 import { syncKindValidator } from "./validators";
 
 const filterLeaseMs = 10 * 60_000;
+const syncLeaseMs = 10 * 60_000;
 const filterRecoveryDelayMs = 30_000;
 const maxFilterRecoveries = 1;
 const filterBatchSize = 8;
@@ -59,7 +60,7 @@ export const begin = internalMutation({
       }
       if (
         existing.status === "running" &&
-        now - existing.startedAt < 10 * 60_000
+        now - existing.startedAt < syncLeaseMs
       ) {
         return {
           runId: existing._id,
@@ -74,6 +75,11 @@ export const begin = internalMutation({
         startedAt: now,
         completedAt: undefined,
       });
+      await ctx.scheduler.runAfter(
+        syncLeaseMs,
+        internal.syncData.recoverUnclaimedRun,
+        { runId: existing._id, startedAt: now },
+      );
       return { runId: existing._id, shouldRun: true, resumeFiltering };
     }
     const runId = await ctx.db.insert("syncRuns", {
@@ -91,7 +97,37 @@ export const begin = internalMutation({
       failedCount: 0,
       startedAt: now,
     });
+    await ctx.scheduler.runAfter(
+      syncLeaseMs,
+      internal.syncData.recoverUnclaimedRun,
+      { runId, startedAt: now },
+    );
     return { runId, shouldRun: true, resumeFiltering: false };
+  },
+});
+
+export const recoverUnclaimedRun = internalMutation({
+  args: { runId: v.id("syncRuns"), startedAt: v.number() },
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (
+      !run ||
+      run.status !== "running" ||
+      run.startedAt !== args.startedAt ||
+      run.filterStartedAt !== undefined
+    )
+      return;
+    const error = "Sync worker timed out before filtering";
+    await ctx.db.patch(run._id, {
+      status: "failed",
+      error,
+      completedAt: Date.now(),
+    });
+    await ctx.scheduler.runAfter(0, internal.syncData.fail, {
+      runId: run._id,
+      filterStartedAt: undefined,
+      error,
+    });
   },
 });
 
@@ -105,7 +141,13 @@ export const upsertLaunches = internalMutation({
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId);
     const run = await ctx.db.get(args.runId);
-    if (!project || !run || run.projectId !== project._id) return [];
+    if (
+      !project ||
+      !run ||
+      run.status !== "running" ||
+      run.projectId !== project._id
+    )
+      return [];
     const now = Date.now();
     const candidateIds: Id<"projectLaunches">[] = [];
 
@@ -457,7 +499,7 @@ export const completeWithoutCandidates = internalMutation({
   args: { runId: v.id("syncRuns") },
   handler: async (ctx, args) => {
     const run = await ctx.db.get(args.runId);
-    if (!run) return;
+    if (!run || run.status !== "running") return;
     await ctx.db.patch(run._id, {
       status: "completed",
       filterStartedAt: undefined,

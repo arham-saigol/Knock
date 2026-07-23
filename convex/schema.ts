@@ -36,6 +36,7 @@ export default defineSchema({
     monitorEnabled: v.boolean(),
     monitorGeneration: v.number(),
     monitorId: v.optional(v.string()),
+    monitorStartedAt: v.optional(v.number()),
     monitorError: v.optional(v.string()),
     lateSyncEnabled: v.boolean(),
     skipRetention: skipRetentionValidator,

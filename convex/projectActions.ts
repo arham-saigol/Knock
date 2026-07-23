@@ -11,6 +11,7 @@ import {
   createProjectMonitor,
   crawlProjectWebsite,
   deleteProjectMonitor,
+  findProjectMonitorIds,
 } from "./lib/firecrawl";
 import { errorMessage } from "./lib/strings";
 
@@ -118,6 +119,14 @@ export const configureMonitor = internalAction({
     });
     if (!project || project.monitorGeneration !== args.expectedGeneration)
       return;
+    const monitorStartedAt = await ctx.runMutation(
+      internal.projects.startMonitorConfiguration,
+      {
+        projectId: project._id,
+        expectedGeneration: args.expectedGeneration,
+      },
+    );
+    if (monitorStartedAt === null) return;
     if (args.previousMonitorId) {
       try {
         await deleteProjectMonitor(args.previousMonitorId);
@@ -147,17 +156,33 @@ export const configureMonitor = internalAction({
         });
         return;
       }
-      createdMonitorId = await createProjectMonitor({
+      const matchingMonitorIds = await findProjectMonitorIds({
         projectId: project._id,
-        projectName: project.name,
-        url: project.domain,
+        monitorGeneration: args.expectedGeneration,
       });
+      const monitorId =
+        matchingMonitorIds[0] ??
+        (await createProjectMonitor({
+          projectId: project._id,
+          projectName: project.name,
+          monitorGeneration: args.expectedGeneration,
+          url: project.domain,
+        }));
+      if (matchingMonitorIds.length === 0) createdMonitorId = monitorId;
       const saved = await ctx.runMutation(internal.projects.setMonitorResult, {
         projectId: project._id,
         expectedGeneration: args.expectedGeneration,
-        monitorId: createdMonitorId,
+        monitorId,
       });
-      if (!saved) {
+      const obsoleteMonitorIds = saved
+        ? matchingMonitorIds.slice(1)
+        : matchingMonitorIds;
+      for (const monitorIdToDelete of obsoleteMonitorIds) {
+        await ctx.scheduler.runAfter(0, internal.projectActions.deleteMonitor, {
+          monitorId: monitorIdToDelete,
+        });
+      }
+      if (!saved && createdMonitorId) {
         await ctx.scheduler.runAfter(0, internal.projectActions.deleteMonitor, {
           monitorId: createdMonitorId,
         });

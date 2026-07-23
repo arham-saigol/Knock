@@ -38,6 +38,7 @@ const CLEANUP_BATCH_SIZE = 8;
 const contextBuildLeaseMs = 10 * 60_000;
 const contextRecoveryDelayMs = 30_000;
 const maxContextRecoveries = 1;
+const monitorConfigurationLeaseMs = 10 * 60_000;
 
 export const list = query({
   args: { paginationOpts: paginationOptsValidator },
@@ -216,7 +217,8 @@ export const update = mutation({
     const monitorChanged =
       args.monitorEnabled !== project.monitorEnabled ||
       domainChanged ||
-      (args.monitorEnabled && Boolean(project.monitorError));
+      (args.monitorEnabled &&
+        (!project.monitorId || Boolean(project.monitorError)));
     const monitorGeneration =
       project.monitorGeneration + (monitorChanged ? 1 : 0);
     if (contextChanged && !args.brandContext.whatItDoes.trim()) {
@@ -264,6 +266,7 @@ export const update = mutation({
       draftInstructions: args.draftInstructions.trim().slice(0, 8_000),
       monitorEnabled: args.monitorEnabled,
       monitorGeneration,
+      monitorStartedAt: monitorChanged ? undefined : project.monitorStartedAt,
       lateSyncEnabled: args.lateSyncEnabled,
       skipRetention: args.skipRetention,
       updatedAt: now,
@@ -650,10 +653,66 @@ export const setMonitorResult = internalMutation({
       return false;
     await ctx.db.patch(project._id, {
       monitorId: args.monitorId,
+      monitorStartedAt: undefined,
       monitorError: args.error?.slice(0, 1_000),
       updatedAt: Date.now(),
     });
     return true;
+  },
+});
+
+export const startMonitorConfiguration = internalMutation({
+  args: {
+    projectId: v.id("projects"),
+    expectedGeneration: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId);
+    if (
+      !project ||
+      project.monitorGeneration !== args.expectedGeneration ||
+      project.monitorStartedAt !== undefined
+    )
+      return null;
+    const monitorStartedAt = Date.now();
+    await ctx.db.patch(project._id, { monitorStartedAt });
+    await ctx.scheduler.runAfter(
+      monitorConfigurationLeaseMs,
+      internal.projects.recoverMonitorConfiguration,
+      {
+        projectId: project._id,
+        expectedGeneration: args.expectedGeneration,
+        monitorStartedAt,
+      },
+    );
+    return monitorStartedAt;
+  },
+});
+
+export const recoverMonitorConfiguration = internalMutation({
+  args: {
+    projectId: v.id("projects"),
+    expectedGeneration: v.number(),
+    monitorStartedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId);
+    if (
+      !project ||
+      project.monitorGeneration !== args.expectedGeneration ||
+      project.monitorStartedAt !== args.monitorStartedAt
+    )
+      return;
+    await ctx.db.patch(project._id, {
+      monitorStartedAt: undefined,
+      monitorError: "Monitor configuration timed out; retrying",
+      updatedAt: Date.now(),
+    });
+    await ctx.scheduler.runAfter(0, internal.projectActions.configureMonitor, {
+      projectId: project._id,
+      previousMonitorId: project.monitorId,
+      expectedGeneration: args.expectedGeneration,
+    });
   },
 });
 
