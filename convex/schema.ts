@@ -24,6 +24,7 @@ export default defineSchema({
     senderEmail: v.string(),
     brandContext: brandContextValidator,
     contextGeneration: v.number(),
+    settingsRevision: v.number(),
     contextStatus: projectStatusValidator,
     contextError: v.optional(v.string()),
     filterInstructions: v.string(),
@@ -103,6 +104,7 @@ export default defineSchema({
     researchCompletedAt: v.optional(v.number()),
     contactStartedAt: v.optional(v.number()),
     draftStartedAt: v.optional(v.number()),
+    draftRecoveryCount: v.optional(v.number()),
     discoveredAt: v.number(),
     updatedAt: v.number(),
   })
@@ -143,6 +145,8 @@ export default defineSchema({
     ownerId: v.string(),
     projectId: v.id("projects"),
     draftId: v.id("drafts"),
+    recipientEmail: v.string(),
+    canonicalWebsiteUrl: v.optional(v.string()),
     attemptNumber: v.number(),
     status: v.union(
       v.literal("sending"),
@@ -156,7 +160,17 @@ export default defineSchema({
     finishedAt: v.optional(v.number()),
   })
     .index("by_draft", ["draftId", "attemptNumber"])
-    .index("by_project", ["projectId", "startedAt"]),
+    .index("by_project", ["projectId", "startedAt"])
+    .index("by_project_and_recipient_email_and_status", [
+      "projectId",
+      "recipientEmail",
+      "status",
+    ])
+    .index("by_project_and_canonical_website_and_status", [
+      "projectId",
+      "canonicalWebsiteUrl",
+      "status",
+    ]),
 
   syncRuns: defineTable({
     key: v.string(),
@@ -173,6 +187,7 @@ export default defineSchema({
     failedCount: v.number(),
     filterStartedAt: v.optional(v.number()),
     filterCompletedAt: v.optional(v.number()),
+    filterRecoveryCount: v.optional(v.number()),
     error: v.optional(v.string()),
     startedAt: v.number(),
     completedAt: v.optional(v.number()),

@@ -52,13 +52,16 @@ export const reserve = mutation({
     ) {
       throw new ConvexError("Draft is no longer available");
     }
-    const [project, projectLaunch] = await Promise.all([
+    const [project, projectLaunch, launch] = await Promise.all([
       ctx.db.get(draft.projectId),
       ctx.db.get(draft.projectLaunchId),
+      ctx.db.get(draft.launchId),
     ]);
-    if (!project || !projectLaunch || !projectLaunch.contactEmail) {
+    if (!project || !projectLaunch || !launch || !projectLaunch.contactEmail) {
       throw new ConvexError("Draft contact details are incomplete");
     }
+    const recipientEmail = projectLaunch.contactEmail.trim().toLowerCase();
+    const canonicalWebsiteUrl = launch.canonicalWebsiteUrl;
     const attempts = await ctx.db
       .query("deliveryAttempts")
       .withIndex("by_draft", (q) => q.eq("draftId", draft._id))
@@ -80,11 +83,45 @@ export const reserve = mutation({
           : "The prior delivery outcome is unknown. Check the Sent folder before taking any action.",
       );
     }
+    const blockingStatuses = ["sending", "sent", "unknown"] as const;
+    const priorDeliveries = await Promise.all([
+      ...blockingStatuses.map((status) =>
+        ctx.db
+          .query("deliveryAttempts")
+          .withIndex("by_project_and_recipient_email_and_status", (q) =>
+            q
+              .eq("projectId", project._id)
+              .eq("recipientEmail", recipientEmail)
+              .eq("status", status),
+          )
+          .first(),
+      ),
+      ...(canonicalWebsiteUrl
+        ? blockingStatuses.map((status) =>
+            ctx.db
+              .query("deliveryAttempts")
+              .withIndex("by_project_and_canonical_website_and_status", (q) =>
+                q
+                  .eq("projectId", project._id)
+                  .eq("canonicalWebsiteUrl", canonicalWebsiteUrl)
+                  .eq("status", status),
+              )
+              .first(),
+          )
+        : []),
+    ]);
+    if (priorDeliveries.some(Boolean)) {
+      throw new ConvexError(
+        "This company already has a sent or unresolved delivery",
+      );
+    }
     const now = Date.now();
     const attemptId = await ctx.db.insert("deliveryAttempts", {
       ownerId: identity.subject,
       projectId: project._id,
       draftId: draft._id,
+      recipientEmail,
+      canonicalWebsiteUrl,
       attemptNumber: attempts.length + 1,
       status: "sending",
       startedAt: now,
@@ -99,7 +136,7 @@ export const reserve = mutation({
       attemptId,
       senderName: project.senderName,
       senderEmail: project.senderEmail,
-      recipientEmail: projectLaunch.contactEmail,
+      recipientEmail,
       subject: draft.subject,
       body: draft.body,
     };

@@ -96,6 +96,9 @@ function SettingsForm({ project }: { project: Doc<"projects"> }) {
     generation: project.contextGeneration,
     ...initialContext,
   });
+  const [settingsRevision, setSettingsRevision] = useState(
+    project.settingsRevision,
+  );
   const [filterInstructions, setFilterInstructions] = useState(
     project.filterInstructions,
   );
@@ -118,6 +121,7 @@ function SettingsForm({ project }: { project: Doc<"projects"> }) {
     contextFields.every(([key]) => lists[key] === contextSource.lists[key]);
   const contextHasConflict =
     contextSource.generation < project.contextGeneration && !contextIsUnedited;
+  const settingsHaveConflict = settingsRevision < project.settingsRevision;
 
   if (
     contextSource.generation < project.contextGeneration &&
@@ -162,9 +166,10 @@ function SettingsForm({ project }: { project: Doc<"projects"> }) {
     setMessage("");
     try {
       const nextBrandContext = brandContext();
-      const savedGeneration = await updateProject({
+      const savedProject = await updateProject({
         projectId: project._id,
         expectedContextGeneration: contextSource.generation,
+        expectedSettingsRevision: settingsRevision,
         name,
         domain,
         senderName,
@@ -177,9 +182,10 @@ function SettingsForm({ project }: { project: Doc<"projects"> }) {
         skipRetention,
       });
       setContextSource({
-        generation: savedGeneration,
+        generation: savedProject.contextGeneration,
         ...contextFormValues(nextBrandContext),
       });
+      setSettingsRevision(savedProject.settingsRevision);
       setMessage("Settings saved");
     } catch (caught) {
       setError(
@@ -265,7 +271,7 @@ function SettingsForm({ project }: { project: Doc<"projects"> }) {
           </Button>
           <Button
             type="submit"
-            disabled={saving}
+            disabled={saving || settingsHaveConflict}
             className="hard-shadow-sm border-foreground bg-accent text-accent-foreground border-2"
           >
             {saving ? <LoaderCircle className="animate-spin" /> : <Save />}
@@ -274,6 +280,22 @@ function SettingsForm({ project }: { project: Doc<"projects"> }) {
         </div>
       </header>
 
+      {settingsHaveConflict ? (
+        <div className="border-destructive text-destructive mt-5 flex flex-col gap-3 border-2 p-4 sm:flex-row sm:items-center">
+          <p className="text-sm">
+            Project settings changed in another session. Load the latest version
+            before saving.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => window.location.reload()}
+            className="border-destructive ml-auto border-2"
+          >
+            Load latest
+          </Button>
+        </div>
+      ) : null}
       {error ? (
         <p
           role="alert"

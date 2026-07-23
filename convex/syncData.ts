@@ -6,6 +6,8 @@ import { internalMutation, internalQuery } from "./_generated/server";
 import { syncKindValidator } from "./validators";
 
 const filterLeaseMs = 10 * 60_000;
+const filterRecoveryDelayMs = 30_000;
+const maxFilterRecoveries = 1;
 
 const launchInput = v.object({
   productHuntId: v.optional(v.string()),
@@ -224,18 +226,49 @@ export const recoverFilterLease = internalMutation({
     )
       return;
     const now = Date.now();
+    const recoveryCount = run.filterRecoveryCount ?? 0;
+    if (recoveryCount >= maxFilterRecoveries) {
+      const candidates = await ctx.db
+        .query("projectLaunches")
+        .withIndex("by_sync_stage", (q) =>
+          q.eq("syncRunId", run._id).eq("stage", "filtering"),
+        )
+        .collect();
+      for (const candidate of candidates) {
+        await ctx.db.patch(candidate._id, {
+          status: "failed",
+          stage: "complete",
+          failure: "Filter worker timed out after retrying",
+          updatedAt: now,
+        });
+      }
+      await ctx.db.patch(run._id, {
+        status: "failed",
+        filterStartedAt: undefined,
+        filterRecoveryCount: undefined,
+        failedCount: candidates.length,
+        error: "Filter worker timed out after retrying",
+        completedAt: now,
+      });
+      return;
+    }
     await ctx.db.patch(run._id, {
       status: "failed",
       filterStartedAt: undefined,
+      filterRecoveryCount: recoveryCount + 1,
       error: "Filter worker lease expired",
       completedAt: now,
     });
-    await ctx.scheduler.runAfter(0, internal.syncActions.runSync, {
-      projectId: run.projectId,
-      kind: run.kind,
-      slot: run.slot,
-      launchDay: run.launchDay,
-    });
+    await ctx.scheduler.runAfter(
+      filterRecoveryDelayMs,
+      internal.syncActions.runSync,
+      {
+        projectId: run.projectId,
+        kind: run.kind,
+        slot: run.slot,
+        launchDay: run.launchDay,
+      },
+    );
   },
 });
 
@@ -309,6 +342,7 @@ export const applyFilters = internalMutation({
       keptCount,
       failedCount,
       filterCompletedAt: now,
+      filterRecoveryCount: undefined,
       completedAt: now,
     });
   },

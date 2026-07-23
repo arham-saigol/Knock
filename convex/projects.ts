@@ -1,3 +1,4 @@
+import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 
 import { internal } from "./_generated/api";
@@ -100,6 +101,7 @@ export const create = mutation({
       senderEmail,
       brandContext: emptyBrandContext,
       contextGeneration: 1,
+      settingsRevision: 1,
       contextStatus: "building",
       filterInstructions: "",
       draftInstructions: "",
@@ -126,6 +128,7 @@ export const update = mutation({
   args: {
     projectId: v.id("projects"),
     expectedContextGeneration: v.number(),
+    expectedSettingsRevision: v.number(),
     name: v.string(),
     domain: v.string(),
     senderName: v.string(),
@@ -139,6 +142,11 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     const project = await requireProject(ctx, args.projectId);
+    if (project.settingsRevision !== args.expectedSettingsRevision) {
+      throw new ConvexError(
+        "Project settings changed in another session. Load the latest version before saving.",
+      );
+    }
     const canonicalDomain = normalizeDomain(args.domain);
     const senderEmail = validateSenderDomain(args.senderEmail, canonicalDomain);
     const name = cleanSingleLine(args.name, 80);
@@ -185,6 +193,7 @@ export const update = mutation({
     }
     const contextGeneration =
       project.contextGeneration + (contextChanged || domainChanged ? 1 : 0);
+    const settingsRevision = project.settingsRevision + 1;
     if (contextChanged) {
       await ctx.db.insert("projectContextVersions", {
         projectId: project._id,
@@ -201,6 +210,7 @@ export const update = mutation({
       senderEmail,
       brandContext: args.brandContext,
       contextGeneration,
+      settingsRevision,
       contextStatus: domainChanged
         ? "building"
         : contextChanged
@@ -238,7 +248,7 @@ export const update = mutation({
         },
       );
     }
-    return contextGeneration;
+    return { contextGeneration, settingsRevision };
   },
 });
 
@@ -374,14 +384,24 @@ export const findByMonitorId = internalQuery({
 });
 
 export const listInternal = internalQuery({
-  args: { lateOnly: v.optional(v.boolean()) },
+  args: {
+    lateOnly: v.optional(v.boolean()),
+    paginationOpts: paginationOptsValidator,
+  },
   handler: async (ctx, args) => {
-    const projects = await ctx.db.query("projects").collect();
-    return projects.filter(
-      (project) =>
-        project.contextStatus === "ready" &&
-        (!args.lateOnly || project.lateSyncEnabled),
-    );
+    const projects = await ctx.db
+      .query("projects")
+      .paginate(args.paginationOpts);
+    return {
+      ...projects,
+      page: projects.page
+        .filter(
+          (project) =>
+            project.contextStatus === "ready" &&
+            (!args.lateOnly || project.lateSyncEnabled),
+        )
+        .map((project) => project._id),
+    };
   },
 });
 

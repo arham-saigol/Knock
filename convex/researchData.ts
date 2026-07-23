@@ -191,6 +191,7 @@ export const save = internalMutation({
       contactEvidence: args.contactEvidence?.slice(0, 1_000),
       status: "processing",
       stage: "drafting",
+      draftRecoveryCount: undefined,
       researchStartedAt: undefined,
       researchCompletedAt: now,
       updatedAt: now,
@@ -275,6 +276,7 @@ export const finishAgent = internalMutation({
       contactEvidence: args.contactEvidence?.slice(0, 1_000),
       status: "processing",
       stage: "drafting",
+      draftRecoveryCount: undefined,
       contactStartedAt: undefined,
       updatedAt: now,
     });

@@ -4,6 +4,8 @@ import { internal } from "./_generated/api";
 import { internalMutation, internalQuery } from "./_generated/server";
 
 const draftLeaseMs = 10 * 60_000;
+const draftRecoveryDelayMs = 30_000;
+const maxDraftRecoveries = 1;
 
 export const claim = internalMutation({
   args: { projectLaunchId: v.id("projectLaunches") },
@@ -33,6 +35,7 @@ export const claim = internalMutation({
               ? "skipped"
               : "ready",
         stage: existing.status === "sent" ? "complete" : "review",
+        draftRecoveryCount: undefined,
         updatedAt: Date.now(),
       });
       return null;
@@ -72,13 +75,29 @@ export const recoverLease = internalMutation({
       projectLaunch.draftStartedAt !== args.draftStartedAt
     )
       return;
+    const recoveryCount = projectLaunch.draftRecoveryCount ?? 0;
+    const now = Date.now();
+    if (recoveryCount >= maxDraftRecoveries) {
+      await ctx.db.patch(projectLaunch._id, {
+        status: "failed",
+        stage: "complete",
+        draftStartedAt: undefined,
+        draftRecoveryCount: undefined,
+        failure: "Draft worker timed out after retrying",
+        updatedAt: now,
+      });
+      return;
+    }
     await ctx.db.patch(projectLaunch._id, {
       draftStartedAt: undefined,
-      updatedAt: Date.now(),
+      draftRecoveryCount: recoveryCount + 1,
+      updatedAt: now,
     });
-    await ctx.scheduler.runAfter(0, internal.draftActions.generateDraft, {
-      projectLaunchId: projectLaunch._id,
-    });
+    await ctx.scheduler.runAfter(
+      draftRecoveryDelayMs,
+      internal.draftActions.generateDraft,
+      { projectLaunchId: projectLaunch._id },
+    );
   },
 });
 
@@ -138,6 +157,7 @@ export const save = internalMutation({
       status: "ready",
       stage: "review",
       draftStartedAt: undefined,
+      draftRecoveryCount: undefined,
       failure: undefined,
       updatedAt: now,
     });
@@ -162,6 +182,7 @@ export const fail = internalMutation({
       status: "failed",
       stage: "complete",
       draftStartedAt: undefined,
+      draftRecoveryCount: undefined,
       failure: args.error.slice(0, 1_000),
       updatedAt: Date.now(),
     });

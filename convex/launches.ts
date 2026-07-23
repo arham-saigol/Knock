@@ -173,6 +173,7 @@ export const retry = mutation({
         status: "processing",
         stage: "drafting",
         draftStartedAt: undefined,
+        draftRecoveryCount: undefined,
         failure: undefined,
         updatedAt: now,
       });
@@ -187,6 +188,7 @@ export const retry = mutation({
         stage: "scraping",
         researchStartedAt: undefined,
         researchCompletedAt: undefined,
+        draftRecoveryCount: undefined,
         failure: undefined,
         updatedAt: now,
       });
