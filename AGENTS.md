@@ -7,3 +7,17 @@ Core Rules:
 - Put performance first. When two options are sound, choose the one that makes the app feel fastest and works better.
 - Use good defaults and keep setup to a minimum. Users should get value with no setup.
 - Never trade security for ease of use.
+
+<!-- convex-ai-start -->
+
+This project uses [Convex](https://convex.dev) as its backend.
+
+When working on Convex code, **always read
+`convex/_generated/ai/guidelines.md` first** for important guidelines on
+how to correctly use Convex APIs and patterns. The file contains rules that
+override what you may have learned about Convex from training data.
+
+Convex agent skills for common tasks can be installed by running
+`npx convex ai-files install`.
+
+<!-- convex-ai-end -->
