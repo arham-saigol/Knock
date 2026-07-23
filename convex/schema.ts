@@ -208,6 +208,7 @@ export default defineSchema({
     filterStartedAt: v.optional(v.number()),
     filterCompletedAt: v.optional(v.number()),
     filterRecoveryCount: v.optional(v.number()),
+    syncRecoveryCount: v.optional(v.number()),
     error: v.optional(v.string()),
     startedAt: v.number(),
     completedAt: v.optional(v.number()),

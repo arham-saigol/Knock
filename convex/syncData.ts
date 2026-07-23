@@ -9,7 +9,9 @@ import { syncKindValidator } from "./validators";
 const filterLeaseMs = 10 * 60_000;
 const syncLeaseMs = 10 * 60_000;
 const filterRecoveryDelayMs = 30_000;
+const syncRecoveryDelayMs = 30_000;
 const maxFilterRecoveries = 1;
+const maxSyncRecoveries = 1;
 const filterBatchSize = 8;
 
 const launchInput = v.object({
@@ -117,9 +119,14 @@ export const recoverUnclaimedRun = internalMutation({
       run.filterStartedAt !== undefined
     )
       return;
-    const error = "Sync worker timed out before filtering";
+    const recoveryCount = run.syncRecoveryCount ?? 0;
+    const shouldRetry = recoveryCount < maxSyncRecoveries;
+    const error = shouldRetry
+      ? "Sync worker timed out before filtering; retrying"
+      : "Sync worker timed out before filtering after retrying";
     await ctx.db.patch(run._id, {
       status: "failed",
+      syncRecoveryCount: shouldRetry ? recoveryCount + 1 : undefined,
       error,
       completedAt: Date.now(),
     });
@@ -127,6 +134,14 @@ export const recoverUnclaimedRun = internalMutation({
       runId: run._id,
       filterStartedAt: undefined,
       error,
+      retry: shouldRetry
+        ? {
+            projectId: run.projectId,
+            kind: run.kind,
+            slot: run.slot,
+            launchDay: run.launchDay,
+          }
+        : undefined,
     });
   },
 });
@@ -450,6 +465,7 @@ export const completeFilters = internalMutation({
       filterStartedAt: undefined,
       filterCompletedAt: now,
       filterRecoveryCount: undefined,
+      syncRecoveryCount: undefined,
       completedAt: now,
     });
     return true;
@@ -461,6 +477,14 @@ export const fail = internalMutation({
     runId: v.id("syncRuns"),
     filterStartedAt: v.optional(v.number()),
     error: v.string(),
+    retry: v.optional(
+      v.object({
+        projectId: v.id("projects"),
+        kind: syncKindValidator,
+        slot: v.string(),
+        launchDay: v.string(),
+      }),
+    ),
   },
   handler: async (ctx, args): Promise<null> => {
     const run = await ctx.db.get(args.runId);
@@ -490,6 +514,12 @@ export const fail = internalMutation({
     });
     if (candidates.length === 50) {
       await ctx.scheduler.runAfter(0, internal.syncData.fail, args);
+    } else if (args.retry) {
+      await ctx.scheduler.runAfter(
+        syncRecoveryDelayMs,
+        internal.syncActions.runSync,
+        args.retry,
+      );
     }
     return null;
   },
@@ -504,6 +534,7 @@ export const completeWithoutCandidates = internalMutation({
       status: "completed",
       filterStartedAt: undefined,
       filterRecoveryCount: undefined,
+      syncRecoveryCount: undefined,
       completedAt: Date.now(),
     });
   },

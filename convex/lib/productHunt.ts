@@ -10,7 +10,27 @@ import { BlockList, isIP, type LookupFunction } from "node:net";
 import { productHuntDayBounds } from "./time";
 import { normalizeWebsiteUrl } from "./urls";
 
-const blockedAddresses = new BlockList();
+const blockedIpv4Addresses = new BlockList();
+const blockedIpv6Addresses = new BlockList();
+const withUrlResolutionLimit = createLimiter(5);
+
+function createLimiter(concurrency: number) {
+  let active = 0;
+  const waiting: Array<() => void> = [];
+  return async function limit<T>(operation: () => Promise<T>) {
+    if (active >= concurrency) {
+      await new Promise<void>((resolve) => waiting.push(resolve));
+    }
+    active += 1;
+    try {
+      return await operation();
+    } finally {
+      active -= 1;
+      waiting.shift()?.();
+    }
+  };
+}
+
 for (const [network, prefix] of [
   ["0.0.0.0", 8],
   ["10.0.0.0", 8],
@@ -27,7 +47,7 @@ for (const [network, prefix] of [
   ["224.0.0.0", 4],
   ["240.0.0.0", 4],
 ] as const) {
-  blockedAddresses.addSubnet(network, prefix, "ipv4");
+  blockedIpv4Addresses.addSubnet(network, prefix, "ipv4");
 }
 for (const [network, prefix] of [
   ["::", 128],
@@ -38,10 +58,16 @@ for (const [network, prefix] of [
   ["ff00::", 8],
   ["2001:db8::", 32],
 ] as const) {
-  blockedAddresses.addSubnet(network, prefix, "ipv6");
+  blockedIpv6Addresses.addSubnet(network, prefix, "ipv6");
 }
 
-async function assertPublicHttpUrl(value: string) {
+export async function assertPublicHttpUrl(
+  value: string,
+  resolveAddresses: (
+    hostname: string,
+  ) => Promise<Array<{ address: string; family: number }>> = (hostname) =>
+    lookup(hostname, { all: true, verbatim: true }),
+) {
   const url = new URL(value);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("Redirect target must use HTTP or HTTPS");
@@ -53,11 +79,13 @@ async function assertPublicHttpUrl(value: string) {
   const literalFamily = isIP(hostname);
   const addresses = literalFamily
     ? [{ address: hostname, family: literalFamily }]
-    : await lookup(hostname, { all: true, verbatim: true });
+    : await resolveAddresses(hostname);
   if (
     addresses.length === 0 ||
     addresses.some(({ address, family }) =>
-      blockedAddresses.check(address, family === 6 ? "ipv6" : "ipv4"),
+      family === 6
+        ? blockedIpv6Addresses.check(address, "ipv6")
+        : blockedIpv4Addresses.check(address, "ipv4"),
     )
   ) {
     throw new Error("Redirect target resolved to a non-public address");
@@ -65,9 +93,10 @@ async function assertPublicHttpUrl(value: string) {
   return { url, addresses };
 }
 
-function requestPinnedHttpUrl(
+export function requestPinnedHttpUrl(
   url: URL,
   addresses: { address: string; family: number }[],
+  requestOverride?: typeof httpRequest,
 ) {
   return new Promise<{ status: number; location?: string }>(
     (resolve, reject) => {
@@ -83,7 +112,10 @@ function requestPinnedHttpUrl(
         }
         callback(null, address.address, address.family);
       };
-      const request = (url.protocol === "https:" ? httpsRequest : httpRequest)(
+      const requestFunction =
+        requestOverride ??
+        (url.protocol === "https:" ? httpsRequest : httpRequest);
+      const request = requestFunction(
         url,
         {
           method: "GET",
@@ -215,36 +247,39 @@ export async function fetchProductHuntApi(day: string) {
     }
     launches.push(
       ...(await Promise.all(
-        posts.nodes.map(async (post): Promise<ProductHuntLaunch> => {
-          const officialWebsiteUrl = await resolveProductUrl(
-            post.id,
-            post.website,
-          );
-          const websiteUrl =
-            officialWebsiteUrl ?? normalizeOfficialWebsiteUrl(post.website);
-          return {
-            productHuntId: post.id,
-            name: post.name.trim(),
-            tagline: post.tagline.trim(),
-            description: post.description?.trim() ?? "",
-            topics:
-              post.topics?.nodes?.map((topic) => topic.name).filter(Boolean) ??
-              [],
-            websiteUrl,
-            canonicalWebsiteUrl: officialWebsiteUrl,
-            thumbnailUrl: post.thumbnail?.url,
-            makers:
-              post.makers?.map((maker) => ({
-                name: maker.name,
-                username: maker.username,
-                imageUrl: maker.profileImage ?? undefined,
-              })) ?? [],
-            productHuntUrl: normalizeWebsiteUrl(post.url) ?? post.url,
-            launchedAt: new Date(post.createdAt).getTime(),
-            launchDay: day,
-            source: "api",
-          };
-        }),
+        posts.nodes.map((post) =>
+          withUrlResolutionLimit(async (): Promise<ProductHuntLaunch> => {
+            const officialWebsiteUrl = await resolveProductUrl(
+              post.id,
+              post.website,
+            );
+            const websiteUrl =
+              officialWebsiteUrl ?? normalizeOfficialWebsiteUrl(post.website);
+            return {
+              productHuntId: post.id,
+              name: post.name.trim(),
+              tagline: post.tagline.trim(),
+              description: post.description?.trim() ?? "",
+              topics:
+                post.topics?.nodes
+                  ?.map((topic) => topic.name)
+                  .filter(Boolean) ?? [],
+              websiteUrl,
+              canonicalWebsiteUrl: officialWebsiteUrl,
+              thumbnailUrl: post.thumbnail?.url,
+              makers:
+                post.makers?.map((maker) => ({
+                  name: maker.name,
+                  username: maker.username,
+                  imageUrl: maker.profileImage ?? undefined,
+                })) ?? [],
+              productHuntUrl: normalizeWebsiteUrl(post.url) ?? post.url,
+              launchedAt: new Date(post.createdAt).getTime(),
+              launchDay: day,
+              source: "api",
+            };
+          }),
+        ),
       )),
     );
     if (posts.pageInfo?.hasNextPage) {
@@ -350,30 +385,34 @@ export async function fetchProductHuntRss(day: string) {
   }
 
   return Promise.all(
-    matching.map(async (entry): Promise<ProductHuntLaunch> => {
-      const id = entry.id?.match(/Post\/(\d+)/)?.[1];
-      const $ = cheerio.load(entry.content ?? "");
-      const paragraphs = $("p")
-        .map((_index, element) => $(element).text().replace(/\s+/g, " ").trim())
-        .get()
-        .filter(Boolean);
-      const fallbackUrl = firstLink(entry) ?? "https://www.producthunt.com";
-      const productHuntUrl = normalizeWebsiteUrl(fallbackUrl) ?? fallbackUrl;
-      const officialWebsiteUrl = id ? await resolveProductUrl(id) : undefined;
-      return {
-        productHuntId: id,
-        name: entry.title?.trim() || "Untitled launch",
-        tagline: paragraphs[0] ?? "",
-        description: paragraphs[0] ?? "",
-        topics: [],
-        websiteUrl: officialWebsiteUrl,
-        canonicalWebsiteUrl: officialWebsiteUrl,
-        makers: entry.author?.name ? [{ name: entry.author.name }] : [],
-        productHuntUrl,
-        launchedAt: new Date(entry.published ?? Date.now()).getTime(),
-        launchDay: day,
-        source: "rss",
-      };
-    }),
+    matching.map((entry) =>
+      withUrlResolutionLimit(async (): Promise<ProductHuntLaunch> => {
+        const id = entry.id?.match(/Post\/(\d+)/)?.[1];
+        const $ = cheerio.load(entry.content ?? "");
+        const paragraphs = $("p")
+          .map((_index, element) =>
+            $(element).text().replace(/\s+/g, " ").trim(),
+          )
+          .get()
+          .filter(Boolean);
+        const fallbackUrl = firstLink(entry) ?? "https://www.producthunt.com";
+        const productHuntUrl = normalizeWebsiteUrl(fallbackUrl) ?? fallbackUrl;
+        const officialWebsiteUrl = id ? await resolveProductUrl(id) : undefined;
+        return {
+          productHuntId: id,
+          name: entry.title?.trim() || "Untitled launch",
+          tagline: paragraphs[0] ?? "",
+          description: paragraphs[0] ?? "",
+          topics: [],
+          websiteUrl: officialWebsiteUrl,
+          canonicalWebsiteUrl: officialWebsiteUrl,
+          makers: entry.author?.name ? [{ name: entry.author.name }] : [],
+          productHuntUrl,
+          launchedAt: new Date(entry.published ?? Date.now()).getTime(),
+          launchDay: day,
+          source: "rss",
+        };
+      }),
+    ),
   );
 }
