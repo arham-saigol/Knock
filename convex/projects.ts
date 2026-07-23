@@ -105,7 +105,7 @@ export const create = mutation({
       draftInstructions: "",
       monitorEnabled: false,
       monitorGeneration: 0,
-      lateSyncEnabled: false,
+      lateSyncEnabled: true,
       skipRetention: "30",
       createdAt: now,
       updatedAt: now,

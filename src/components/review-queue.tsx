@@ -8,7 +8,7 @@ import {
   Send,
   SquareArrowOutUpRight,
 } from "lucide-react";
-import { startTransition, useEffect, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -53,6 +53,7 @@ export function ReviewQueue({
     "saved",
   );
   const [saveInFlight, setSaveInFlight] = useState(false);
+  const editRevision = useRef(0);
   const [busy, setBusy] = useState<"skip" | "send">();
   const [error, setError] = useState("");
 
@@ -85,10 +86,11 @@ export function ReviewQueue({
       editedBody === undefined
     )
       return;
-    if (saveInFlight) return;
+    if (saveInFlight || saveState === "error") return;
     const saved = acknowledged[currentDraftId];
     if (saved?.subject === editedSubject && saved.body === editedBody) return;
     const timeout = window.setTimeout(() => {
+      const revision = editRevision.current;
       setSaveInFlight(true);
       void updateDraft({
         draftId: currentDraftId,
@@ -110,7 +112,9 @@ export function ReviewQueue({
           }));
           setSaveState("saved");
         })
-        .catch(() => setSaveState("error"))
+        .catch(() => {
+          if (editRevision.current === revision) setSaveState("error");
+        })
         .finally(() => setSaveInFlight(false));
     }, 650);
     return () => window.clearTimeout(timeout);
@@ -121,11 +125,13 @@ export function ReviewQueue({
     editedBody,
     editedSubject,
     saveInFlight,
+    saveState,
     updateDraft,
   ]);
 
   function editSubject(value: string) {
     if (!current) return;
+    editRevision.current += 1;
     setSaveState("saving");
     setEdits((previous) => ({
       ...previous,
@@ -135,6 +141,7 @@ export function ReviewQueue({
 
   function editBody(value: string) {
     if (!current) return;
+    editRevision.current += 1;
     setSaveState("saving");
     setEdits((previous) => ({
       ...previous,
