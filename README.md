@@ -70,9 +70,9 @@ Convex schedules fixed UTC times because Pakistan Standard Time stays at UTC+5:
 
 | PKT      | UTC   | Work                                                  |
 | -------- | ----- | ----------------------------------------------------- |
+| 1:15 PM  | 08:15 | Optional previous-day sync after Product Hunt closes  |
 | 2:45 PM  | 09:45 | Main Product Hunt sync and one MiniMax metadata batch |
 | 3:05 PM  | 10:05 | Queue drafts for completed research                   |
-| 11:45 PM | 18:45 | Optional per-project late sync for unseen launches    |
 | 12:00 AM | 19:00 | Remove expired skipped draft content                  |
 
 The GraphQL query omits the `featured` argument, uses Product Hunt day boundaries, and follows every cursor. RSS runs only after an API failure. Convex deduplicates by Product Hunt ID, canonical website URL, then Product Hunt URL.

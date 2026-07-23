@@ -67,6 +67,14 @@ export function ReviewQueue({
   const body = currentEdit?.body ?? current?.draft.body ?? "";
   const editedSubject = currentEdit?.subject;
   const editedBody = currentEdit?.body;
+  const currentAcknowledged = currentDraftId
+    ? acknowledged[currentDraftId]
+    : undefined;
+  const isSaved =
+    saveState === "saved" &&
+    (!currentEdit ||
+      (currentAcknowledged?.subject === subject &&
+        currentAcknowledged.body === body));
 
   useEffect(() => {
     if (
@@ -137,7 +145,7 @@ export function ReviewQueue({
   }
 
   async function skip() {
-    if (!current || busy || saveState !== "saved") return;
+    if (!current || busy || !isSaved) return;
     setBusy("skip");
     setError("");
     try {
@@ -153,7 +161,7 @@ export function ReviewQueue({
   }
 
   async function send() {
-    if (!current || busy || saveState !== "saved") return;
+    if (!current || busy || !isSaved) return;
     setBusy("send");
     setError("");
     try {
@@ -178,7 +186,7 @@ export function ReviewQueue({
     <Dialog
       open={open}
       onOpenChange={(nextOpen) => {
-        if (!nextOpen && saveState === "saving") return;
+        if (!nextOpen && !isSaved && saveState !== "error") return;
         onOpenChange(nextOpen);
       }}
     >
@@ -253,11 +261,11 @@ export function ReviewQueue({
                     Email body
                   </Label>
                   <span className="text-muted-foreground font-mono text-[10px] uppercase">
-                    {saveState === "saving"
-                      ? "Saving"
-                      : saveState === "error"
-                        ? "Save failed"
-                        : "Saved"}
+                    {saveState === "error"
+                      ? "Save failed"
+                      : isSaved
+                        ? "Saved"
+                        : "Saving"}
                   </span>
                 </div>
                 <Textarea
@@ -287,7 +295,7 @@ export function ReviewQueue({
                   variant="outline"
                   size="lg"
                   onClick={skip}
-                  disabled={Boolean(busy) || saveState !== "saved"}
+                  disabled={Boolean(busy) || !isSaved}
                   className="border-foreground border-2"
                 >
                   {busy === "skip" ? (
@@ -299,10 +307,7 @@ export function ReviewQueue({
                   size="lg"
                   onClick={send}
                   disabled={
-                    Boolean(busy) ||
-                    saveState !== "saved" ||
-                    !subject.trim() ||
-                    !body.trim()
+                    Boolean(busy) || !isSaved || !subject.trim() || !body.trim()
                   }
                   className="hard-shadow border-foreground bg-accent text-accent-foreground hover:bg-accent/80 border-2"
                 >

@@ -119,13 +119,14 @@ export const runSync = internalAction({
     projectId: v.id("projects"),
     kind: syncKindValidator,
     slot: v.string(),
+    launchDay: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ started: boolean }> => {
     const project = await ctx.runQuery(internal.projects.getInternal, {
       projectId: args.projectId,
     });
     if (!project) return { started: false };
-    const day = productHuntDay();
+    const day = args.launchDay ?? productHuntDay();
     const key = `${project._id}:${day}:${args.kind}:${args.slot}`;
     const begun = await ctx.runMutation(internal.syncData.begin, {
       key,

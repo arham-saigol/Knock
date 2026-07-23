@@ -35,12 +35,13 @@ export const lateSync = internalAction({
     const projects = await ctx.runQuery(internal.projects.listInternal, {
       lateOnly: true,
     });
-    const slot = productHuntDay();
+    const launchDay = productHuntDay(Date.now() - 24 * 60 * 60 * 1_000);
     for (const project of projects) {
       await ctx.scheduler.runAfter(0, internal.syncActions.runSync, {
         projectId: project._id,
         kind: "late",
-        slot,
+        slot: launchDay,
+        launchDay,
       });
     }
   },
