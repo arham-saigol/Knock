@@ -1,12 +1,14 @@
 import { ConvexError } from "convex/values";
 
 import type { Doc, Id } from "../_generated/dataModel";
-import type { MutationCtx, QueryCtx } from "../_generated/server";
+import type { ActionCtx, MutationCtx, QueryCtx } from "../_generated/server";
+
+type AuthReader = Pick<ActionCtx | MutationCtx | QueryCtx, "auth">;
 
 type DatabaseReader =
   Pick<QueryCtx, "auth" | "db"> | Pick<MutationCtx, "auth" | "db">;
 
-export async function requireIdentity(ctx: DatabaseReader) {
+export async function requireIdentity(ctx: AuthReader) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) {
     throw new ConvexError("Authentication required");

@@ -37,4 +37,18 @@ describe("email discovery", () => {
     }
     expect(isAllowedContactEmail("hello@example.com")).toBe(true);
   });
+
+  it("skips malformed mailto links without discarding valid candidates", () => {
+    const candidates = extractEmailCandidates({
+      sourceUrl: "https://example.com/contact",
+      html: `
+        <a href="mailto:%ZZ">Broken address</a>
+        <a href="mailto:founder@example.com">Email the founder</a>
+      `,
+    });
+
+    expect(candidates.map((candidate) => candidate.email)).toContain(
+      "founder@example.com",
+    );
+  });
 });

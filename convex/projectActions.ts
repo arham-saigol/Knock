@@ -5,7 +5,7 @@ import { v } from "convex/values";
 
 import { internal } from "./_generated/api";
 import { action, internalAction } from "./_generated/server";
-import { assertAllowedUser } from "./lib/auth";
+import { assertProjectOwner, requireIdentity } from "./lib/auth";
 import { generateDeepSeekObject } from "./lib/deepseek";
 import {
   createProjectMonitor,
@@ -28,12 +28,11 @@ const brandContextSchema = z.object({
 export const rebuildContext = action({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Authentication required");
-    assertAllowedUser(identity.subject);
-    const project = await ctx.runQuery(internal.projects.getInternal, args);
-    if (!project || project.ownerId !== identity.subject)
-      throw new Error("Project not found");
+    const identity = await requireIdentity(ctx);
+    assertProjectOwner(
+      await ctx.runQuery(internal.projects.getInternal, args),
+      identity.subject,
+    );
     const expectedGeneration = await ctx.runMutation(
       internal.projects.startContextGeneration,
       args,

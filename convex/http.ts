@@ -58,7 +58,7 @@ const firecrawlMonitor = httpAction(async (ctx, request) => {
     monitorId,
   });
   if (!project || !project.monitorEnabled)
-    return new Response("Monitor not found", { status: 404 });
+    return new Response("Ignored", { status: 202 });
   const registered = await ctx.runMutation(internal.monitoringData.register, {
     monitorId,
     checkId,

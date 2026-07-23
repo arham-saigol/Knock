@@ -52,6 +52,7 @@ export function ReviewQueue({
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">(
     "saved",
   );
+  const [saveInFlight, setSaveInFlight] = useState(false);
   const [busy, setBusy] = useState<"skip" | "send">();
   const [error, setError] = useState("");
 
@@ -71,7 +72,7 @@ export function ReviewQueue({
     ? acknowledged[currentDraftId]
     : undefined;
   const isSaved =
-    saveState === "saved" &&
+    !saveInFlight &&
     (!currentEdit ||
       (currentAcknowledged?.subject === subject &&
         currentAcknowledged.body === body));
@@ -84,9 +85,11 @@ export function ReviewQueue({
       editedBody === undefined
     )
       return;
+    if (saveInFlight) return;
     const saved = acknowledged[currentDraftId];
     if (saved?.subject === editedSubject && saved.body === editedBody) return;
     const timeout = window.setTimeout(() => {
+      setSaveInFlight(true);
       void updateDraft({
         draftId: currentDraftId,
         expectedVersion: currentDraftVersion,
@@ -107,7 +110,8 @@ export function ReviewQueue({
           }));
           setSaveState("saved");
         })
-        .catch(() => setSaveState("error"));
+        .catch(() => setSaveState("error"))
+        .finally(() => setSaveInFlight(false));
     }, 650);
     return () => window.clearTimeout(timeout);
   }, [
@@ -116,6 +120,7 @@ export function ReviewQueue({
     currentDraftVersion,
     editedBody,
     editedSubject,
+    saveInFlight,
     updateDraft,
   ]);
 
@@ -261,10 +266,10 @@ export function ReviewQueue({
                     Email body
                   </Label>
                   <span className="text-muted-foreground font-mono text-[10px] uppercase">
-                    {saveState === "error"
-                      ? "Save failed"
-                      : isSaved
-                        ? "Saved"
+                    {isSaved
+                      ? "Saved"
+                      : saveState === "error"
+                        ? "Save failed"
                         : "Saving"}
                   </span>
                 </div>

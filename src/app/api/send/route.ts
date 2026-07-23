@@ -17,6 +17,17 @@ function required(name: string) {
   return value;
 }
 
+function isExplicitSmtpFailure(error: unknown) {
+  if (!error || typeof error !== "object" || !("responseCode" in error))
+    return false;
+  const responseCode = error.responseCode;
+  return (
+    typeof responseCode === "number" &&
+    responseCode >= 400 &&
+    responseCode < 600
+  );
+}
+
 export async function POST(request: Request) {
   const { userId, getToken } = await auth();
   if (!userId)
@@ -89,15 +100,16 @@ export async function POST(request: Request) {
     const message =
       error instanceof Error ? error.message : "Unable to send email";
     if (attemptId && client) {
-      const mutation = smtpStarted
-        ? client.mutation(api.deliveries.markUnknown, {
-            attemptId,
-            error: message,
-          })
-        : client.mutation(api.deliveries.fail, {
-            attemptId,
-            error: message,
-          });
+      const mutation =
+        smtpStarted && !isExplicitSmtpFailure(error)
+          ? client.mutation(api.deliveries.markUnknown, {
+              attemptId,
+              error: message,
+            })
+          : client.mutation(api.deliveries.fail, {
+              attemptId,
+              error: message,
+            });
       await mutation.catch(() => undefined);
     }
     return NextResponse.json({ error: message }, { status: 502 });

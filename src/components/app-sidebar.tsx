@@ -144,6 +144,7 @@ export function AppSidebar() {
       </header>
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent
+          aria-label="Navigation"
           side="left"
           className="border-foreground w-[290px] border-r-2 p-0 shadow-none"
           showCloseButton={false}

@@ -96,12 +96,15 @@ export function extractEmailCandidates({
     const $ = cheerio.load(html);
     $("a[href^='mailto:']").each((_index, element) => {
       const href = $(element).attr("href") ?? "";
-      candidates.push(
-        ...candidatesFromText(
-          decodeURIComponent(href.replace(/^mailto:/i, "").split("?")[0]),
-          sourceUrl,
-        ),
-      );
+      let address;
+      try {
+        address = decodeURIComponent(
+          href.replace(/^mailto:/i, "").split("?")[0],
+        );
+      } catch {
+        return;
+      }
+      candidates.push(...candidatesFromText(address, sourceUrl));
     });
     $("script[type='application/ld+json'], meta[content]").each(
       (_index, element) => {

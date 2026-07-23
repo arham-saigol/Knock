@@ -24,6 +24,11 @@ export function CreateProjectDialog() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
+  function changeOpen(open: boolean) {
+    if (!open) setError("");
+    setCreateOpen(open);
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true);
@@ -37,7 +42,7 @@ export function CreateProjectDialog() {
         senderEmail: String(data.get("senderEmail") ?? ""),
       });
       selectProject(projectId);
-      setCreateOpen(false);
+      changeOpen(false);
     } catch (caught) {
       setError(
         caught instanceof Error ? caught.message : "Unable to create project",
@@ -48,7 +53,7 @@ export function CreateProjectDialog() {
   }
 
   return (
-    <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+    <Dialog open={createOpen} onOpenChange={changeOpen}>
       <DialogContent className="hard-shadow border-foreground border-2 ring-0 sm:max-w-lg">
         <form onSubmit={submit} className="contents">
           <DialogHeader>
@@ -86,7 +91,7 @@ export function CreateProjectDialog() {
             <Button
               type="button"
               variant="outline"
-              onClick={() => setCreateOpen(false)}
+              onClick={() => changeOpen(false)}
             >
               Cancel
             </Button>

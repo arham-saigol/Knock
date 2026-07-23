@@ -154,7 +154,7 @@ export default function TodayPage() {
             {launches.map(({ projectLaunch, launch, draft }) => (
               <article
                 key={projectLaunch._id}
-                className="border-foreground bg-card hover:bg-muted grid grid-cols-[2.5rem_1fr_auto] items-center gap-3 border-b-2 px-3 py-3.5 transition-colors md:grid-cols-[3rem_minmax(0,1fr)_9rem_2rem] md:px-4"
+                className="border-foreground bg-card hover:bg-muted grid grid-cols-[2.5rem_minmax(0,1fr)_auto_2rem] items-center gap-3 border-b-2 px-3 py-3.5 transition-colors md:grid-cols-[3rem_minmax(0,1fr)_9rem_2rem] md:px-4"
               >
                 <div className="border-foreground bg-background grid size-9 place-items-center border-2 text-sm font-bold uppercase md:size-10">
                   {launch.name.slice(0, 1)}
@@ -200,7 +200,7 @@ export default function TodayPage() {
                       )
                     }
                     aria-label={`Retry ${launch.name}`}
-                    className="hover:border-foreground hover:bg-accent hidden size-8 place-items-center border border-transparent md:grid"
+                    className="hover:border-foreground hover:bg-accent grid size-8 place-items-center border border-transparent"
                   >
                     <RefreshCw className="size-4" />
                   </button>
@@ -210,7 +210,7 @@ export default function TodayPage() {
                     target="_blank"
                     rel="noreferrer"
                     aria-label={`Open ${launch.name} on Product Hunt`}
-                    className="hover:border-foreground hover:bg-accent hidden size-8 place-items-center border border-transparent md:grid"
+                    className="hover:border-foreground hover:bg-accent grid size-8 place-items-center border border-transparent"
                   >
                     <ArrowUpRight className="size-4" />
                   </a>
